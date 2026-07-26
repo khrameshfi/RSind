@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSind — Indian Market RS Rating</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --pos: #2f81f7;
+    --neg: #f85149;
+    --strong: #3fb950;
+    --accent: #f0883e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px;
+  }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .3px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .wrap { padding: 16px 20px 60px; }
+
+  .filters {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; margin-bottom: 14px;
+  }
+  .f { display: flex; flex-direction: column; gap: 5px; }
+  .f label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .f input, .f select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 13px; min-width: 110px;
+  }
+  .f input:focus, .f select:focus { outline: none; border-color: var(--pos); }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  .chip {
+    display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px;
+    background: rgba(47,129,247,.12); border: 1px solid rgba(47,129,247,.35); color: var(--pos);
+  }
+
+  .tablebox { border: 1px solid var(--border); border-radius: 8px; overflow: auto; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 8px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  th {
+    position: sticky; top: 0; background: #1c2128; z-index: 2;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted);
+    cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--text); }
+  th.sorted { color: var(--pos); }
+  td.l, th.l { text-align: left; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  .tk { font-weight: 600; }
+  .tk a { color: var(--text); text-decoration: none; }
+  .tk a:hover { color: var(--pos); text-decoration: underline; }
+  .rs { font-weight: 700; }
+  .rs-99 { color: var(--strong); }
+  .rs-90 { color: var(--pos); }
+  .rs-70 { color: var(--text); }
+  .rs-lo { color: var(--muted); }
+  .trend { font-size: 12px; color: var(--muted); }
+  .up { color: var(--strong); }
+  .down { color: var(--neg); }
+  .links a {
+    color: var(--muted); text-decoration: none; font-size: 11px;
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; margin-left: 4px;
+  }
+  .links a:hover { color: var(--pos); border-color: var(--pos); }
+  .sector { color: var(--muted); font-size: 12px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .msg { padding: 40px 20px; text-align: center; color: var(--muted); }
+  .err { color: var(--neg); }
+  code { background: #21262d; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RSind</h1>
+  <span class="sub">IBD-style Relative Strength Rating &middot; NSE universe vs Nifty&nbsp;50</span>
+  <span class="sub" id="meta" style="margin-left:auto"></span>
+</header>
+
+<div class="wrap">
+  <div class="filters">
+    <div class="f">
+      <label>Search</label>
+      <input id="q" type="text" placeholder="Ticker or sector" autocomplete="off">
+    </div>
+    <div class="f">
+      <label>Min RS Rating</label>
+      <input id="minrs" type="number" value="90" min="0" max="99" step="1">
+    </div>
+    <div class="f">
+      <label>Max % off 52wk high</label>
+      <input id="maxoff" type="number" value="25" min="0" max="100" step="1">
+    </div>
+    <div class="f">
+      <label>Min avg vol (50d)</label>
+      <input id="minvol" type="number" value="100000" min="0" step="50000">
+    </div>
+    <div class="f">
+      <label>Sector</label>
+      <select id="sector"><option value="">All</option></select>
+    </div>
+    <div class="f">
+      <label>&nbsp;</label>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="f" style="margin-left:auto">
+      <label>&nbsp;</label>
+      <span class="chip" id="count">—</span>
+    </div>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead>
+        <tr>
+          <th class="l" data-k="Ticker">Ticker</th>
+          <th data-k="Percentile">RS</th>
+          <th data-k="_trend">RS Trend<br><span style="font-weight:400;text-transform:none">6M&rarr;3M&rarr;1M</span></th>
+          <th data-k="Price">Price</th>
+          <th data-k="PctFrom52WkHigh">% off high</th>
+          <th data-k="AvgVol50">Avg Vol 50d</th>
+          <th data-k="MarketCap">Mkt Cap</th>
+          <th class="l" data-k="Sector">Sector</th>
+          <th class="l">Open in</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="msg" id="msg">Loading rankings…</div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────
+// Served from GitHub Pages at the repo root, so the CSV sits alongside this file.
+const CSV_PATH = "output/rs_stocks.csv";
+
+// ── Minimal CSV parser (handles quoted fields, which pandas emits for
+//    values containing commas — e.g. some industry names) ──────────────────
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQ = false;
+      } else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(field); field = ""; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== '\r') field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const head = rows.shift().map(h => h.trim());
+  return rows.filter(r => r.length > 1).map(r => {
+    const o = {};
+    head.forEach((h, i) => o[h] = (r[i] ?? "").trim());
+    return o;
+  });
+}
+
+const num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+const fmtVol = v => v == null ? "—"
+  : v >= 1e7 ? (v / 1e7).toFixed(1) + "Cr"
+  : v >= 1e5 ? (v / 1e5).toFixed(1) + "L"
+  : v >= 1e3 ? (v / 1e3).toFixed(0) + "K" : String(v);
+const fmtCap = v => v == null ? "—"
+  : v >= 1e12 ? "₹" + (v / 1e12).toFixed(2) + "T"
+  : v >= 1e9  ? "₹" + (v / 1e9).toFixed(1)  + "B"
+  : v >= 1e7  ? "₹" + (v / 1e7).toFixed(0)  + "Cr" : "₹" + v;
+
+let DATA = [], sortKey = "Percentile", sortDir = -1;
+
+function rsClass(p) {
+  if (p >= 95) return "rs rs-99";
+  if (p >= 85) return "rs rs-90";
+  if (p >= 60) return "rs rs-70";
+  return "rs rs-lo";
+}
+
+// RS trend: 6M -> 3M -> 1M percentile, with an arrow showing overall direction.
+function trendCell(r) {
+  const a = num(r["6M_RS_Percentile"]), b = num(r["3M_RS_Percentile"]), c = num(r["1M_RS_Percentile"]);
+  if (a == null || b == null || c == null) return '<span class="trend">—</span>';
+  const now = num(r["Percentile"]);
+  const delta = (now != null ? now : c) - a;
+  const cls = delta > 5 ? "up" : delta < -5 ? "down" : "";
+  const arrow = delta > 5 ? "▲" : delta < -5 ? "▼" : "▬";
+  return `<span class="trend">${a} → ${b} → ${c} <span class="${cls}">${arrow}</span></span>`;
+}
+
+function apply() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const minrs = num(document.getElementById("minrs").value) ?? 0;
+  const maxoff = num(document.getElementById("maxoff").value);
+  const minvol = num(document.getElementById("minvol").value) ?? 0;
+  const sector = document.getElementById("sector").value;
+
+  let out = DATA.filter(r => {
+    const p = num(r["Percentile"]);
+    if (p == null || p < minrs) return false;
+    const off = num(r["PctFrom52WkHigh"]);           // negative = below the high
+    if (maxoff != null && off != null && Math.abs(off) > maxoff) return false;
+    const v = num(r["AvgVol50"]);
+    if (v != null && v < minvol) return false;
+    if (sector && r["Sector"] !== sector) return false;
+    if (q) {
+      const hay = (r["Ticker"] + " " + r["Sector"] + " " + r["Industry"]).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  out.sort((x, y) => {
+    let a, b;
+    if (sortKey === "_trend") {
+      a = (num(x["Percentile"]) ?? 0) - (num(x["6M_RS_Percentile"]) ?? 0);
+      b = (num(y["Percentile"]) ?? 0) - (num(y["6M_RS_Percentile"]) ?? 0);
+    } else if (sortKey === "Ticker" || sortKey === "Sector") {
+      return (x[sortKey] || "").localeCompare(y[sortKey] || "") * sortDir;
+    } else {
+      a = num(x[sortKey]); b = num(y[sortKey]);
+    }
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return (a - b) * sortDir;
+  });
+
+  document.getElementById("count").textContent =
+    out.length + " of " + DATA.length + " stocks";
+
+  document.getElementById("rows").innerHTML = out.slice(0, 500).map(r => {
+    const t = r["Ticker"], p = num(r["Percentile"]);
+    const off = num(r["PctFrom52WkHigh"]);
+    return `<tr>
+      <td class="l tk"><a href="https://www.tradingview.com/chart/?symbol=NSE%3A${encodeURIComponent(t)}" target="_blank" rel="noopener">${t}</a></td>
+      <td class="${rsClass(p)}">${p ?? "—"}</td>
+      <td>${trendCell(r)}</td>
+      <td>${num(r["Price"]) != null ? "₹" + num(r["Price"]).toFixed(2) : "—"}</td>
+      <td class="${off != null && off < -15 ? "down" : ""}">${off != null ? off.toFixed(1) + "%" : "—"}</td>
+      <td>${fmtVol(num(r["AvgVol50"]))}</td>
+      <td>${fmtCap(num(r["MarketCap"]))}</td>
+      <td class="l sector" title="${(r["Industry"] || "").replace(/"/g, "&quot;")}">${r["Sector"] || "—"}</td>
+      <td class="l links">
+        <a href="https://www.tradingview.com/chart/?symbol=NSE%3A${encodeURIComponent(t)}" target="_blank" rel="noopener">TV</a>
+        <a href="https://www.screener.in/company/${encodeURIComponent(t)}/" target="_blank" rel="noopener">Screener</a>
+      </td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("msg").style.display = out.length ? "none" : "block";
+  if (!out.length) document.getElementById("msg").textContent = "No stocks match these filters.";
+}
+
+document.querySelectorAll("th[data-k]").forEach(th => {
+  th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    if (sortKey === k) sortDir *= -1;
+    else { sortKey = k; sortDir = (k === "Ticker" || k === "Sector") ? 1 : -1; }
+    document.querySelectorAll("th").forEach(x => x.classList.remove("sorted"));
+    th.classList.add("sorted");
+    apply();
+  });
+});
+["q", "minrs", "maxoff", "minvol", "sector"].forEach(id =>
+  document.getElementById(id).addEventListener("input", apply));
+document.getElementById("reset").addEventListener("click", () => {
+  document.getElementById("q").value = "";
+  document.getElementById("minrs").value = 90;
+  document.getElementById("maxoff").value = 25;
+  document.getElementById("minvol").value = 100000;
+  document.getElementById("sector").value = "";
+  apply();
+});
+
+fetch(CSV_PATH + "?t=" + Date.now())
+  .then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const lm = r.headers.get("last-modified");
+    if (lm) document.getElementById("meta").textContent =
+      "Data updated " + new Date(lm).toLocaleString();
+    return r.text();
+  })
+  .then(txt => {
+    DATA = parseCSV(txt);
+    if (!DATA.length) throw new Error("CSV parsed but empty");
+    const sectors = [...new Set(DATA.map(r => r["Sector"]).filter(s => s && s !== "unknown" && s !== "n/a"))].sort();
+    const sel = document.getElementById("sector");
+    sectors.forEach(s => {
+      const o = document.createElement("option");
+      o.value = o.textContent = s;
+      sel.appendChild(o);
+    });
+    document.querySelector('th[data-k="Percentile"]').classList.add("sorted");
+    apply();
+  })
+  .catch(e => {
+    document.getElementById("msg").innerHTML =
+      '<span class="err">Could not load ' + CSV_PATH + ' (' + e.message + ').</span><br><br>' +
+      'This is expected until the first successful run of the <code>Update RSind rankings</code> ' +
+      'workflow finishes and commits <code>output/rs_stocks.csv</code>.';
+  });
+</script>
+</body>
+</html>
