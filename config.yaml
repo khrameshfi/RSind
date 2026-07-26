@@ -1,0 +1,24 @@
+# RSind — IBD-style RS Rating, calibrated to the Indian (NSE) market.
+# Adapted from Fred6725/relative-strength (fork of skyte/relative-strength), Apache-2.0.
+
+# Data Retrieval
+DATA_SOURCE: YAHOO
+
+# Reference / benchmark ticker (Yahoo Finance symbol).
+# ^NSEI  = Nifty 50 index   (default — matches what the MarketSmith Pine script calls "SP:SPX" for the US version)
+# ^CRSLDX = Nifty 500 index (broader benchmark, uncomment to use instead)
+REFERENCE_TICKER: "^NSEI"
+
+# Lowest percentile you want written to the output files (0 = keep everything)
+MIN_PERCENTILE: 0
+
+# Universe: pull the full NSE main-board equity list (~2,000 stocks) instead of a fixed index basket.
+# This is what makes the percentile meaningful — ranking against the whole market, not just Nifty50.
+USE_ALL_LISTED_STOCKS: true
+
+# Only used if USE_ALL_LISTED_STOCKS is false — restrict to a named index instead
+NIFTY50: true
+NIFTY500: false
+
+# Program behavior
+EXIT_WAIT_FOR_ENTER: false
