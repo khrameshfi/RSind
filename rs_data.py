@@ -81,8 +81,8 @@ NSE_HEADERS = {
 }
 
 NSE_EQUITY_LIST_URLS = [
-    "https://nsearchives.nseindia.com/content/equity/EQUITY_L.csv",
-    "https://archives.nseindia.com/content/equity/EQUITY_L.csv",
+    "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+    "https://archives.nseindia.com/content/equities/EQUITY_L.csv",
 ]
 
 # ── Ticker list retrieval (NSE) ─────────────────────────────────────────────
@@ -138,10 +138,16 @@ def get_nse_tickers(universe="NSE"):
 
 def get_resolved_securities():
     tickers = {REFERENCE_TICKER: REF_TICKER}
-    try:
-        tickers.update(get_nse_tickers())
-    except Exception as e:
-        print(f"⚠ Could not load NSE ticker list: {e}")
+    nse_tickers = get_nse_tickers()  # let this raise — no silent fallback.
+    if len(nse_tickers) < 100:
+        # Sanity check: a healthy NSE list has ~2,000 symbols. If we somehow got a
+        # near-empty result without an exception, treat it as a failure too, so the
+        # GitHub Actions run shows a red X instead of silently "succeeding" with no data.
+        raise RuntimeError(
+            f"NSE ticker list only returned {len(nse_tickers)} symbols — "
+            f"something is wrong (expected ~2,000). Aborting instead of running with bad data."
+        )
+    tickers.update(nse_tickers)
     return tickers
 
 # ── File helpers ─────────────────────────────────────────────────────────────
