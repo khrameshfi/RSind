@@ -46,6 +46,8 @@
     border-radius: 6px; padding: 7px 12px; font-size: 13px; cursor: pointer;
   }
   button:hover { border-color: var(--muted); }
+  button.primary { background: rgba(47,129,247,.15); border-color: rgba(47,129,247,.5); color: var(--pos); }
+  button.primary:hover { background: rgba(47,129,247,.25); border-color: var(--pos); }
   .chip {
     display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px;
     background: rgba(47,129,247,.12); border: 1px solid rgba(47,129,247,.35); color: var(--pos);
@@ -118,6 +120,13 @@
       <label>&nbsp;</label>
       <button id="reset">Reset</button>
     </div>
+    <div class="f">
+      <label>Export current list</label>
+      <div style="display:flex;gap:6px">
+        <button id="dl" class="primary">⬇ TradingView .txt</button>
+        <button id="cp">Copy symbols</button>
+      </div>
+    </div>
     <div class="f" style="margin-left:auto">
       <label>&nbsp;</label>
       <span class="chip" id="count">—</span>
@@ -187,7 +196,10 @@ const fmtCap = v => v == null ? "—"
   : v >= 1e9  ? "₹" + (v / 1e9).toFixed(1)  + "B"
   : v >= 1e7  ? "₹" + (v / 1e7).toFixed(0)  + "Cr" : "₹" + v;
 
-let DATA = [], sortKey = "Percentile", sortDir = -1;
+let DATA = [], CURRENT = [], sortKey = "Percentile", sortDir = -1;
+
+// TradingView caps an imported watchlist at 1,000 symbols.
+const TV_LIMIT = 1000;
 
 function rsClass(p) {
   if (p >= 95) return "rs rs-99";
@@ -244,6 +256,7 @@ function apply() {
     return (a - b) * sortDir;
   });
 
+  CURRENT = out;
   document.getElementById("count").textContent =
     out.length + " of " + DATA.length + " stocks";
 
@@ -282,6 +295,47 @@ document.querySelectorAll("th[data-k]").forEach(th => {
 });
 ["q", "minrs", "maxoff", "minvol", "sector"].forEach(id =>
   document.getElementById(id).addEventListener("input", apply));
+// ── Export to TradingView ────────────────────────────────────────────────
+// TradingView's "Upload list…" expects a .txt of comma-separated symbols,
+// each carrying its exchange prefix (NSE:TICKER). Max 1,000 per list.
+function tvSymbols() {
+  return CURRENT.slice(0, TV_LIMIT).map(r => "NSE:" + r["Ticker"]);
+}
+
+function flash(btn, msg) {
+  const old = btn.textContent;
+  btn.textContent = msg;
+  setTimeout(() => { btn.textContent = old; }, 1600);
+}
+
+document.getElementById("dl").addEventListener("click", e => {
+  if (!CURRENT.length) return flash(e.target, "Nothing to export");
+  const syms = tvSymbols();
+  const blob = new Blob([syms.join(",")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const rs = document.getElementById("minrs").value;
+  a.href = url;
+  a.download = `RSind_RS${rs}plus_${new Date().toISOString().slice(0, 10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  flash(e.target, CURRENT.length > TV_LIMIT
+    ? `Top ${TV_LIMIT} saved (list capped)`
+    : `${syms.length} symbols saved`);
+});
+
+document.getElementById("cp").addEventListener("click", async e => {
+  if (!CURRENT.length) return flash(e.target, "Nothing to copy");
+  const text = tvSymbols().join(",");
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(e.target, "Copied!");
+  } catch {
+    // Clipboard API needs a secure context; fall back to a manual prompt.
+    window.prompt("Copy these symbols:", text);
+  }
+});
+
 document.getElementById("reset").addEventListener("click", () => {
   document.getElementById("q").value = "";
   document.getElementById("minrs").value = 90;
