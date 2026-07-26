@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+failed_tickers.txt
+
+# Raw downloaded price history — ~90MB scratch file, regenerated on every run.
+# Must never be committed (GitHub blocks files over 100MB).
+data/
