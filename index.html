@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RSind — Indian Market RS Rating</title>
 <style>
+  /* ── Dark theme (default) ────────────────────────────────────────────── */
   :root {
     --bg: #0d1117;
     --panel: #161b22;
@@ -14,16 +15,34 @@
     --pos: #2f81f7;
     --neg: #f85149;
     --strong: #3fb950;
-    --accent: #f0883e;
+    --thbg: #1c2128;
+    --hover: rgba(255,255,255,.035);
+    --codebg: #21262d;
   }
+  /* ── Light theme ─────────────────────────────────────────────────────── */
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --panel: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --muted: #656d76;
+    --pos: #0969da;
+    --neg: #cf222e;
+    --strong: #1a7f37;
+    --thbg: #eaeef2;
+    --hover: rgba(0,0,0,.035);
+    --codebg: #eff1f3;
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    transition: background .15s ease, color .15s ease;
   }
   header {
     padding: 16px 20px; border-bottom: 1px solid var(--border);
-    display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
   }
   h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .3px; }
   .sub { color: var(--muted); font-size: 12px; }
@@ -40,6 +59,7 @@
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 8px; font-size: 13px; min-width: 110px;
   }
+  .f input.narrow { min-width: 92px; }
   .f input:focus, .f select:focus { outline: none; border-color: var(--pos); }
   button {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
@@ -48,6 +68,7 @@
   button:hover { border-color: var(--muted); }
   button.primary { background: rgba(47,129,247,.15); border-color: rgba(47,129,247,.5); color: var(--pos); }
   button.primary:hover { background: rgba(47,129,247,.25); border-color: var(--pos); }
+  #theme { margin-left: 8px; white-space: nowrap; }
   .chip {
     display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px;
     background: rgba(47,129,247,.12); border: 1px solid rgba(47,129,247,.35); color: var(--pos);
@@ -57,14 +78,14 @@
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { padding: 8px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
   th {
-    position: sticky; top: 0; background: #1c2128; z-index: 2;
+    position: sticky; top: 0; background: var(--thbg); z-index: 2;
     font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted);
     cursor: pointer; user-select: none;
   }
   th:hover { color: var(--text); }
   th.sorted { color: var(--pos); }
   td.l, th.l { text-align: left; }
-  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody tr:hover { background: var(--hover); }
   .tk { font-weight: 600; }
   .tk a { color: var(--text); text-decoration: none; }
   .tk a:hover { color: var(--pos); text-decoration: underline; }
@@ -84,7 +105,7 @@
   .sector { color: var(--muted); font-size: 12px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
   .msg { padding: 40px 20px; text-align: center; color: var(--muted); }
   .err { color: var(--neg); }
-  code { background: #21262d; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  code { background: var(--codebg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -92,6 +113,7 @@
   <h1>RSind</h1>
   <span class="sub">IBD-style Relative Strength Rating &middot; NSE universe vs Nifty&nbsp;50</span>
   <span class="sub" id="meta" style="margin-left:auto"></span>
+  <button id="theme" title="Switch between light and dark">☀ Light</button>
 </header>
 
 <div class="wrap">
@@ -102,15 +124,22 @@
     </div>
     <div class="f">
       <label>Min RS Rating</label>
-      <input id="minrs" type="number" value="90" min="0" max="99" step="1">
+      <input id="minrs" class="narrow" type="number" value="90" min="0" max="99" step="1">
     </div>
     <div class="f">
       <label>Max % off 52wk high</label>
-      <input id="maxoff" type="number" value="25" min="0" max="100" step="1">
+      <input id="maxoff" class="narrow" type="number" value="25" min="0" max="100" step="1">
     </div>
     <div class="f">
       <label>Min avg vol (50d)</label>
       <input id="minvol" type="number" value="100000" min="0" step="50000">
+    </div>
+    <div class="f">
+      <label>Mkt cap ₹Cr (min / max)</label>
+      <div style="display:flex;gap:6px">
+        <input id="mincap" class="narrow" type="number" placeholder="min" min="0" step="100">
+        <input id="maxcap" class="narrow" type="number" placeholder="max" min="0" step="100">
+      </div>
     </div>
     <div class="f">
       <label>Sector</label>
@@ -159,6 +188,28 @@
 // Served from GitHub Pages at the repo root, so the CSV sits alongside this file.
 const CSV_PATH = "output/rs_stocks.csv";
 
+// TradingView caps an imported watchlist at 1,000 symbols.
+const TV_LIMIT = 1000;
+const CRORE = 1e7;
+
+// ── Theme ─────────────────────────────────────────────────────────────────
+// Light is the default. A preference is only stored once you actually click the
+// toggle — so the default applies cleanly until you choose otherwise.
+const THEME_KEY = "rsind-theme-v2";
+const themeBtn = document.getElementById("theme");
+function setTheme(t, persist) {
+  document.documentElement.setAttribute("data-theme", t);
+  themeBtn.textContent = t === "dark" ? "☀ Light" : "🌙 Dark";
+  if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch (e) {} }
+}
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+  setTheme(saved === "dark" || saved === "light" ? saved : "light", false);
+})();
+themeBtn.addEventListener("click", () =>
+  setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true));
+
 // ── Minimal CSV parser (handles quoted fields, which pandas emits for
 //    values containing commas — e.g. some industry names) ──────────────────
 function parseCSV(text) {
@@ -187,19 +238,22 @@ function parseCSV(text) {
 }
 
 const num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+
 const fmtVol = v => v == null ? "—"
   : v >= 1e7 ? (v / 1e7).toFixed(1) + "Cr"
   : v >= 1e5 ? (v / 1e5).toFixed(1) + "L"
   : v >= 1e3 ? (v / 1e3).toFixed(0) + "K" : String(v);
-const fmtCap = v => v == null ? "—"
-  : v >= 1e12 ? "₹" + (v / 1e12).toFixed(2) + "T"
-  : v >= 1e9  ? "₹" + (v / 1e9).toFixed(1)  + "B"
-  : v >= 1e7  ? "₹" + (v / 1e7).toFixed(0)  + "Cr" : "₹" + v;
+
+// Indian convention: crore (1e7) and lakh (1e5), with en-IN digit grouping
+// (##,##,###) — matches how screener.in and Indian brokers display market cap.
+const fmtCap = v => {
+  if (v == null) return "—";
+  if (v >= CRORE) return "₹" + Math.round(v / CRORE).toLocaleString("en-IN") + " Cr";
+  if (v >= 1e5)   return "₹" + (v / 1e5).toFixed(1) + " L";
+  return "₹" + Math.round(v).toLocaleString("en-IN");
+};
 
 let DATA = [], CURRENT = [], sortKey = "Percentile", sortDir = -1;
-
-// TradingView caps an imported watchlist at 1,000 symbols.
-const TV_LIMIT = 1000;
 
 function rsClass(p) {
   if (p >= 95) return "rs rs-99";
@@ -225,14 +279,29 @@ function apply() {
   const maxoff = num(document.getElementById("maxoff").value);
   const minvol = num(document.getElementById("minvol").value) ?? 0;
   const sector = document.getElementById("sector").value;
+  // Market-cap box values are in CRORES; convert to raw rupees for comparison.
+  const mincapCr = num(document.getElementById("mincap").value);
+  const maxcapCr = num(document.getElementById("maxcap").value);
 
   let out = DATA.filter(r => {
     const p = num(r["Percentile"]);
     if (p == null || p < minrs) return false;
+
     const off = num(r["PctFrom52WkHigh"]);           // negative = below the high
     if (maxoff != null && off != null && Math.abs(off) > maxoff) return false;
+
     const v = num(r["AvgVol50"]);
     if (v != null && v < minvol) return false;
+
+    // Only filter on market cap when a value is actually typed. Stocks with no
+    // cap data are excluded once a cap filter is active, since we can't verify them.
+    if (mincapCr != null || maxcapCr != null) {
+      const cap = num(r["MarketCap"]);
+      if (cap == null) return false;
+      if (mincapCr != null && cap < mincapCr * CRORE) return false;
+      if (maxcapCr != null && cap > maxcapCr * CRORE) return false;
+    }
+
     if (sector && r["Sector"] !== sector) return false;
     if (q) {
       const hay = (r["Ticker"] + " " + r["Sector"] + " " + r["Industry"]).toLowerCase();
@@ -283,6 +352,54 @@ function apply() {
   if (!out.length) document.getElementById("msg").textContent = "No stocks match these filters.";
 }
 
+// ── Export to TradingView ────────────────────────────────────────────────
+// TradingView's "Upload list…" expects a .txt of comma-separated symbols,
+// each carrying its exchange prefix (NSE:TICKER). Max 1,000 per list.
+function tvSymbols() {
+  return CURRENT.slice(0, TV_LIMIT).map(r => "NSE:" + r["Ticker"]);
+}
+
+function flash(btn, msg) {
+  const old = btn.dataset.label || btn.textContent;
+  btn.dataset.label = old;
+  btn.textContent = msg;
+  setTimeout(() => { btn.textContent = btn.dataset.label; }, 2000);
+}
+
+document.getElementById("dl").addEventListener("click", e => {
+  const btn = e.currentTarget;
+  if (!CURRENT.length) return flash(btn, "Nothing to export");
+  const syms = tvSymbols();
+  const blob = new Blob([syms.join(",")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const rs = document.getElementById("minrs").value;
+  a.href = url;
+  a.download = `RSind_RS${rs}plus_${new Date().toISOString().slice(0, 10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  flash(btn, CURRENT.length > TV_LIMIT
+    ? `Saved top ${TV_LIMIT} of ${CURRENT.length}`
+    : `Saved ${syms.length} symbols`);
+});
+
+document.getElementById("cp").addEventListener("click", async e => {
+  const btn = e.currentTarget;
+  if (!CURRENT.length) return flash(btn, "Nothing to copy");
+  const syms = tvSymbols();
+  const text = syms.join(",");
+  const note = CURRENT.length > TV_LIMIT
+    ? `Copied top ${TV_LIMIT} of ${CURRENT.length}`
+    : `Copied ${syms.length} symbols`;
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(btn, note);
+  } catch (err) {
+    // Clipboard API needs a secure context; fall back to a manual prompt.
+    window.prompt(note + " — press Ctrl/Cmd+C:", text);
+  }
+});
+
 document.querySelectorAll("th[data-k]").forEach(th => {
   th.addEventListener("click", () => {
     const k = th.dataset.k;
@@ -293,54 +410,17 @@ document.querySelectorAll("th[data-k]").forEach(th => {
     apply();
   });
 });
-["q", "minrs", "maxoff", "minvol", "sector"].forEach(id =>
+
+["q", "minrs", "maxoff", "minvol", "mincap", "maxcap", "sector"].forEach(id =>
   document.getElementById(id).addEventListener("input", apply));
-// ── Export to TradingView ────────────────────────────────────────────────
-// TradingView's "Upload list…" expects a .txt of comma-separated symbols,
-// each carrying its exchange prefix (NSE:TICKER). Max 1,000 per list.
-function tvSymbols() {
-  return CURRENT.slice(0, TV_LIMIT).map(r => "NSE:" + r["Ticker"]);
-}
-
-function flash(btn, msg) {
-  const old = btn.textContent;
-  btn.textContent = msg;
-  setTimeout(() => { btn.textContent = old; }, 1600);
-}
-
-document.getElementById("dl").addEventListener("click", e => {
-  if (!CURRENT.length) return flash(e.target, "Nothing to export");
-  const syms = tvSymbols();
-  const blob = new Blob([syms.join(",")], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const rs = document.getElementById("minrs").value;
-  a.href = url;
-  a.download = `RSind_RS${rs}plus_${new Date().toISOString().slice(0, 10)}.txt`;
-  a.click();
-  URL.revokeObjectURL(url);
-  flash(e.target, CURRENT.length > TV_LIMIT
-    ? `Top ${TV_LIMIT} saved (list capped)`
-    : `${syms.length} symbols saved`);
-});
-
-document.getElementById("cp").addEventListener("click", async e => {
-  if (!CURRENT.length) return flash(e.target, "Nothing to copy");
-  const text = tvSymbols().join(",");
-  try {
-    await navigator.clipboard.writeText(text);
-    flash(e.target, "Copied!");
-  } catch {
-    // Clipboard API needs a secure context; fall back to a manual prompt.
-    window.prompt("Copy these symbols:", text);
-  }
-});
 
 document.getElementById("reset").addEventListener("click", () => {
   document.getElementById("q").value = "";
   document.getElementById("minrs").value = 90;
   document.getElementById("maxoff").value = 25;
   document.getElementById("minvol").value = 100000;
+  document.getElementById("mincap").value = "";
+  document.getElementById("maxcap").value = "";
   document.getElementById("sector").value = "";
   apply();
 });
