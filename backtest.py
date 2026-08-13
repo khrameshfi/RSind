@@ -1,34 +1,39 @@
 #!/usr/bin/env python
 """
-backtest.py — RSind swing-trading backtest.
+backtest.py - RSind swing-trading backtest (v2).
 
-Strategy under test
--------------------
-  Entry      RS percentile crosses above the trigger (default 80) on day D.
-             Filled at day D+1's OPEN. No overlapping trades in the same name;
-             a fresh cross after an exit re-enters.
-  Stop       Fixed % below entry (default 5%), moved to breakeven once price
-             trades 1 ATR(14) above entry (ATR measured on the signal day).
-  Exit       Daily close below the EMA, filled at the next open.
-             Three variants are run side by side: EMA 10, 20 and 50.
-  Universe   RS is ranked across the WHOLE NSE list, but only names above a
-             market-cap floor (default Rs 2,000 Cr) and a liquidity floor
-             (default Rs 5 Cr median 50-day turnover) are tradeable.
-  Sizing     Fixed rupee amount per trade, unlimited concurrent positions.
-             Peak capital deployed is reported rather than capped.
+v1 finding: RS crossing 80 with a 5% stop and a move-to-breakeven at 1 ATR
+produced 5,454-5,918 trades over three years, a 20-25% win rate, and an
+expectancy of roughly zero - which turns clearly negative once costs are
+applied. Two things stood out:
+
+  * 42.8% of trades reached +1 ATR but 27% exited at breakeven, so most
+    would-be winners were scratched. On daily bars 1 ATR is noise.
+  * Expectancy rose monotonically as the exit was loosened (EMA10 -> EMA50),
+    which is the signature of a low-hit-rate trend follower being strangled
+    by tight exits.
+
+v2 therefore makes every one of those constraints optional and adds the
+selectivity the raw signal lacks:
+
+  --be-atr 0            disable the breakeven move (v1 used 1.0)
+  --stop-atr 2          volatility-scaled stop instead of a flat percentage
+  --trail-atr 3         chandelier trail from the highest high since entry
+  --regime-ma 200       only trade when the index is above its own 200 DMA
+  --trend-ema 200       only buy stocks trading above their 200 EMA
+  --max-off-high 15     only buy within 15% of the 52-week high
+  --max-per-day 10      keep the strongest N signals each day, ranked by RS
+  --cost-pct 0.4        round-trip costs, deducted from every trade
 
 Known limitations - read these before trusting the numbers
 ----------------------------------------------------------
   * Survivorship bias. The universe comes from NSE's CURRENT equity list, so
     companies delisted, merged or suspended during the test window are absent.
-    Their trades - disproportionately losers - never appear. Results are
-    optimistic and this cannot be fixed with free data.
+    Their trades - disproportionately losers - never appear.
   * Market cap is reconstructed as (today's share count x that day's price).
-    Share issuance and buybacks during the window are not modelled.
-  * No slippage, brokerage, STT or impact cost. Add roughly 0.3-0.5% round-trip
-    for a realistic Indian smallcap fill.
   * Prices are split- and dividend-adjusted, so entry prices are not what you
     would have seen on screen at the time; returns are correct, levels are not.
+  * Costs are a flat percentage. Real impact cost on a smallcap is worse.
 """
 
 import argparse
@@ -48,6 +53,7 @@ OUT_DIR = os.path.join(DIR, "output", "backtest")
 
 CRORE = 1e7
 QUARTER = 63          # trading days, matching rs_ranking.py's int(252/4)
+YEAR = 252
 
 
 # -- Data ---------------------------------------------------------------------
@@ -100,16 +106,11 @@ def panel(frames, field):
 
 # -- Indicators ---------------------------------------------------------------
 
-def rs_percentile(close, ref_close, min_names=100):
+def relative_strength(close, ref_close):
     """
     IBD-style RS, identical maths to rs_ranking.py, evaluated on every date.
-
       strength = 0.4*r(1q) + 0.2*r(2q) + 0.2*r(3q) + 0.2*r(4q)
       RS       = (1 + strength_stock) / (1 + strength_index) * 100
-
-    The live dashboard buckets RS with pd.qcut(..., 100). A cross-sectional
-    percentile rank gives the same 0-99 buckets for distinct values and is far
-    faster over ~1,000 dates, so that is what is used here.
     """
     def perf(s, q):
         return s / s.shift(QUARTER * q) - 1
@@ -118,13 +119,16 @@ def rs_percentile(close, ref_close, min_names=100):
                 + 0.2 * perf(close, 3) + 0.2 * perf(close, 4))
     ref_strength = (0.4 * perf(ref_close, 1) + 0.2 * perf(ref_close, 2)
                     + 0.2 * perf(ref_close, 3) + 0.2 * perf(ref_close, 4))
+    return ((1 + strength).div(1 + ref_strength, axis=0) * 100).where(close.notna())
 
-    rs = (1 + strength).div(1 + ref_strength, axis=0) * 100
-    rs = rs.where(close.notna())
 
-    pct = np.ceil(rs.rank(axis=1, pct=True, method="first") * 100) - 1
-    pct = pct.clip(0, 99)
-    # A percentile is meaningless on a day with only a handful of listed names.
+def to_percentile(rs, min_names=100):
+    """
+    The live dashboard buckets RS with pd.qcut(..., 100). A cross-sectional
+    percentile rank gives the same 0-99 buckets for distinct values and is far
+    faster over ~1,000 dates.
+    """
+    pct = (np.ceil(rs.rank(axis=1, pct=True, method="first") * 100) - 1).clip(0, 99)
     return pct.where(rs.notna().sum(axis=1) >= min_names, np.nan)
 
 
@@ -138,14 +142,20 @@ def atr(high, low, close, period=14):
 
 # -- Trade engine -------------------------------------------------------------
 
-def simulate(signals, o, h, l, c, ema, atr_v, stop_pct, atr_mult):
+def simulate(signals, o, h, l, c, ema, atr_v,
+             stop_pct=0.05, stop_atr=0.0, be_atr=0.0, trail_atr=0.0, cost_pct=0.0):
     """
     Walks each ticker independently. Within a day the order is:
-        1. gap check, then intraday stop
-        2. breakeven upgrade if the day traded 1 ATR above entry
-        3. close-below-EMA, which exits at the NEXT open
-    Checking the stop before upgrading it is deliberate - we never know the
-    intraday sequence, so we take the pessimistic reading.
+        1. a pending EMA exit fills at this open
+        2. gap check, then intraday stop
+        3. breakeven upgrade, if enabled and the day traded be_atr above entry
+        4. chandelier trail upgrade, if enabled
+        5. close below the EMA arms an exit for the NEXT open
+    Stops are checked BEFORE they are raised: daily bars never reveal the
+    intraday sequence, so this takes the pessimistic reading.
+
+    stop_atr > 0 replaces the fixed percentage stop with stop_atr x ATR at entry.
+    be_atr = 0 and trail_atr = 0 switch those rules off entirely.
     """
     trades = []
     dates = c.index
@@ -164,24 +174,28 @@ def simulate(signals, o, h, l, c, ema, atr_v, stop_pct, atr_mult):
             entry_i = s + 1
             if entry_i >= n or entry_i <= busy_until:
                 continue
-            entry = O[entry_i]
-            signal_atr = A[s]
-            if not np.isfinite(entry) or entry <= 0 or not np.isfinite(signal_atr):
+            entry, entry_atr = O[entry_i], A[s]
+            if not np.isfinite(entry) or entry <= 0 or not np.isfinite(entry_atr):
                 continue
 
-            stop = entry * (1 - stop_pct)
-            be_level = entry + atr_mult * signal_atr
+            stop = (entry - stop_atr * entry_atr) if stop_atr > 0 else entry * (1 - stop_pct)
+            if stop <= 0:
+                continue
+            init_stop_pct = (stop / entry - 1) * 100
+            be_level = entry + be_atr * entry_atr if be_atr > 0 else np.inf
+
             at_be = False
-            exit_i = exit_px = None
-            reason = None
-            pending_ema_exit = False
+            run_high = entry
+            stop_kind = "stop"
+            exit_i = exit_px = reason = None
+            pending_ema = False
             mae = mfe = 0.0
 
             for j in range(entry_i, n):
                 if not np.isfinite(C[j]):
                     continue
 
-                if pending_ema_exit:
+                if pending_ema:
                     exit_i, exit_px, reason = j, O[j], "ema"
                     break
 
@@ -189,25 +203,33 @@ def simulate(signals, o, h, l, c, ema, atr_v, stop_pct, atr_mult):
                     exit_i, exit_px, reason = j, O[j], "gap"
                     break
                 if np.isfinite(L[j]) and L[j] <= stop:
-                    exit_i, exit_px, reason = j, stop, "be" if at_be else "stop"
+                    exit_i, exit_px, reason = j, stop, stop_kind
                     break
 
                 if np.isfinite(H[j]):
                     mfe = max(mfe, H[j] / entry - 1)
+                    run_high = max(run_high, H[j])
                 if np.isfinite(L[j]):
                     mae = min(mae, L[j] / entry - 1)
 
                 if not at_be and np.isfinite(H[j]) and H[j] >= be_level:
-                    stop = max(stop, entry)
+                    if entry > stop:
+                        stop, stop_kind = entry, "be"
                     at_be = True
 
+                if trail_atr > 0 and np.isfinite(A[j]):
+                    trail = run_high - trail_atr * A[j]
+                    if trail > stop:
+                        stop, stop_kind = trail, "trail"
+
                 if np.isfinite(E[j]) and C[j] < E[j]:
-                    pending_ema_exit = True
+                    pending_ema = True
 
             if exit_i is None:                                   # still open
                 exit_i, exit_px, reason = n - 1, C[n - 1], "open"
 
             busy_until = exit_i
+            gross = (exit_px / entry - 1) * 100
             trades.append({
                 "ticker": tk,
                 "signal_date": dates[s].date(),
@@ -217,7 +239,9 @@ def simulate(signals, o, h, l, c, ema, atr_v, stop_pct, atr_mult):
                 "exit": round(float(exit_px), 2),
                 "reason": reason,
                 "bars": int(exit_i - entry_i),
-                "ret_pct": round((exit_px / entry - 1) * 100, 2),
+                "init_stop_pct": round(init_stop_pct, 2),
+                "ret_pct": round(gross, 2),
+                "net_pct": round(gross - cost_pct, 2),
                 "mfe_pct": round(mfe * 100, 2),
                 "mae_pct": round(mae * 100, 2),
                 "reached_be": bool(at_be),
@@ -233,51 +257,75 @@ def metrics(tr, capital, sessions_index):
         return {"trades": 0}
 
     tr = tr.sort_values("exit_date")
-    pnl = tr["ret_pct"] / 100 * capital
-    wins, losses = tr[tr.ret_pct > 0], tr[tr.ret_pct <= 0]
+    net = tr["net_pct"]
+    pnl = net / 100 * capital
+    wins, losses = tr[net > 0], tr[net <= 0]
 
     equity = pnl.cumsum()
     dd = equity - equity.cummax()
 
-    # Capital tied up, day by day
     held = pd.Series(0, index=sessions_index, dtype=int)
     for a, b in zip(pd.to_datetime(tr.entry_date), pd.to_datetime(tr.exit_date)):
         held.loc[a:b] += 1
 
-    gross_win = wins.ret_pct.sum()
-    gross_loss = abs(losses.ret_pct.sum())
+    gw = wins.net_pct.sum()
+    gl = abs(losses.net_pct.sum())
+    peak_cap = max(int(held.max()) * capital, capital)
 
     return {
         "trades": len(tr),
         "win_rate": round(len(wins) / len(tr) * 100, 1),
-        "avg_win": round(wins.ret_pct.mean(), 2) if len(wins) else 0.0,
-        "avg_loss": round(losses.ret_pct.mean(), 2) if len(losses) else 0.0,
-        "expectancy_pct": round(tr.ret_pct.mean(), 2),
+        "avg_win": round(wins.net_pct.mean(), 2) if len(wins) else 0.0,
+        "avg_loss": round(losses.net_pct.mean(), 2) if len(losses) else 0.0,
+        "gross_exp": round(tr.ret_pct.mean(), 2),
+        "expectancy_pct": round(net.mean(), 2),
         "expectancy_rs": round(pnl.mean(), 0),
-        "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else 999.0,
+        "profit_factor": round(gw / gl, 2) if gl else 999.0,
         "total_pnl": round(pnl.sum(), 0),
         "max_dd": round(dd.min(), 0),
+        "return_on_peak": round(pnl.sum() / peak_cap * 100, 1),
         "median_bars": int(tr.bars.median()),
-        "pct_stopped": round((tr.reason.isin(["stop", "gap"])).mean() * 100, 1),
+        "pct_stopped": round(tr.reason.isin(["stop", "gap"]).mean() * 100, 1),
         "pct_be_exit": round((tr.reason == "be").mean() * 100, 1),
+        "pct_trail_exit": round((tr.reason == "trail").mean() * 100, 1),
         "pct_ema_exit": round((tr.reason == "ema").mean() * 100, 1),
-        "reached_be": round(tr.reached_be.mean() * 100, 1),
+        "best": round(net.max(), 1),
+        "worst": round(net.min(), 1),
         "peak_positions": int(held.max()),
-        "peak_capital": int(held.max() * capital),
+        "peak_capital": peak_cap,
         "avg_positions": round(held.mean(), 1),
     }
 
 
-def write_report(results, bench, args, universe_n, tradeable_n, start, end):
+def write_report(results, bench, args, universe_n, tradeable_n, start, end, funnel):
+    on = lambda v, unit="": f"{v}{unit}" if v else "off"
     lines = [
-        "# RSind backtest - RS crossing above %d" % args.rs_trigger, "",
+        f"# RSind backtest v2 - RS crossing above {args.rs_trigger}", "",
         f"Window **{start} -> {end}** - universe **{universe_n}** NSE names "
-        f"(**{tradeable_n}** passed the size/liquidity filters at least once)", "",
-        f"Stop **{args.stop_pct}%**, moved to breakeven at "
-        f"**{args.atr_mult}x ATR({args.atr_period})** - "
-        f"**Rs {args.capital:,.0f}** per trade - unlimited positions", "",
-        f"Benchmark - Nifty 50 buy & hold: **{bench:+.1f}%**", "",
-        "## Results by exit rule", "",
+        f"(**{tradeable_n}** passed size/liquidity at least once)", "",
+        "## Rules tested", "",
+        f"| Setting | Value |", "|---|---|",
+        f"| Initial stop | {'%s x ATR(%d)' % (args.stop_atr, args.atr_period) if args.stop_atr > 0 else '%s%%' % args.stop_pct} |",
+        f"| Move to breakeven | {on(args.be_atr, ' x ATR')} |",
+        f"| Chandelier trail | {on(args.trail_atr, ' x ATR')} |",
+        f"| Index regime filter | {on(args.regime_ma, ' DMA')} |",
+        f"| Stock trend filter | {on(args.trend_ema, ' EMA')} |",
+        f"| Max % off 52-week high | {on(args.max_off_high, '%')} |",
+        f"| Signals kept per day | {on(args.max_per_day)} (ranked by RS) |",
+        f"| Market cap floor | Rs {args.min_mcap_cr:,.0f} Cr |",
+        f"| Turnover floor | Rs {args.min_turnover_cr:,.0f} Cr (50-day median) |",
+        f"| Round-trip cost | {args.cost_pct}% (deducted from every trade) |",
+        f"| Size per trade | Rs {args.capital:,.0f}, unlimited positions |",
+        "",
+        "## How the filters thinned the signal", "",
+        "| Stage | Signals |", "|---|---:|",
+    ]
+    for label, count in funnel:
+        lines.append(f"| {label} | {count:,} |")
+
+    lines += [
+        "", f"Benchmark - Nifty 50 buy & hold: **{bench:+.1f}%**", "",
+        "## Results by exit rule (net of costs)", "",
         "| | Close < EMA10 | Close < EMA20 | Close < EMA50 |",
         "|---|---:|---:|---:|",
     ]
@@ -287,16 +335,20 @@ def write_report(results, bench, args, universe_n, tradeable_n, start, end):
         ("Win rate", "win_rate", "{}%"),
         ("Average win", "avg_win", "{:+}%"),
         ("Average loss", "avg_loss", "{:+}%"),
-        ("Expectancy / trade", "expectancy_pct", "{:+}%"),
+        ("Expectancy BEFORE costs", "gross_exp", "{:+}%"),
+        ("**Expectancy AFTER costs**", "expectancy_pct", "**{:+}%**"),
         ("Expectancy / trade (Rs)", "expectancy_rs", "Rs {:,.0f}"),
         ("Profit factor", "profit_factor", "{}"),
         ("Total P&L", "total_pnl", "Rs {:,.0f}"),
+        ("Return on peak capital", "return_on_peak", "{:+}%"),
         ("Max drawdown", "max_dd", "Rs {:,.0f}"),
+        ("Best trade", "best", "{:+}%"),
+        ("Worst trade", "worst", "{:+}%"),
         ("Median holding (bars)", "median_bars", "{}"),
         ("Stopped out", "pct_stopped", "{}%"),
         ("Exited at breakeven", "pct_be_exit", "{}%"),
+        ("Exited on trail", "pct_trail_exit", "{}%"),
         ("Exited on EMA", "pct_ema_exit", "{}%"),
-        ("Reached +1 ATR", "reached_be", "{}%"),
         ("Peak open positions", "peak_positions", "{}"),
         ("Peak capital deployed", "peak_capital", "Rs {:,.0f}"),
         ("Average open positions", "avg_positions", "{}"),
@@ -304,26 +356,23 @@ def write_report(results, bench, args, universe_n, tradeable_n, start, end):
     for label, key, fmt in rows:
         cells = []
         for n in (10, 20, 50):
-            v = results[n].get(key, "-")
-            cells.append(fmt.format(v) if v != "-" else "-")
+            v = results[n].get(key)
+            cells.append(fmt.format(v) if v is not None else "-")
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
 
     lines += [
         "", "## Read this before acting on the numbers", "",
         "* **Survivorship bias.** The universe is NSE's *current* equity list. "
-        "Companies delisted, merged or suspended during the window are missing "
-        "entirely, and those are disproportionately losers. Every figure above "
-        "is optimistic.",
-        "* **No costs.** Brokerage, STT, exchange charges and slippage are "
-        "excluded. Budget 0.3-0.5% round trip; at this trade count that is a "
-        "large deduction.",
+        "Companies delisted, merged or suspended during the window are missing, "
+        "and those are disproportionately losers. Every figure is optimistic.",
+        f"* **Costs are modelled at a flat {args.cost_pct}% round trip.** Real "
+        "impact cost on an illiquid smallcap is worse, and worse still when you "
+        "are one of many chasing the same breakout.",
         "* **Market cap is reconstructed** from today's share count x the price "
         "on each day. Issuance and buybacks are not modelled.",
-        "* **Adjusted prices.** Splits and dividends are back-adjusted, so entry "
-        "levels differ from what was on screen at the time. Returns are right; "
-        "absolute prices are not.",
-        "* Unlimited concurrent positions means the peak capital line is the "
-        "money you would actually have needed at the worst moment.",
+        "* **Adjusted prices.** Returns are right; absolute levels are not.",
+        "* A positive expectancy on a few hundred trades is not proof of an "
+        "edge. Check that it holds in both halves of the window before sizing up.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -332,25 +381,30 @@ def write_report(results, bench, args, universe_n, tradeable_n, start, end):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--years", type=float, default=3, help="years of trading to test")
+    p.add_argument("--years", type=float, default=3)
     p.add_argument("--rs-trigger", type=int, default=80)
-    p.add_argument("--stop-pct", type=float, default=5.0)
-    p.add_argument("--atr-mult", type=float, default=1.0)
+    p.add_argument("--stop-pct", type=float, default=5.0, help="flat stop, used when --stop-atr is 0")
+    p.add_argument("--stop-atr", type=float, default=2.0, help="ATR-multiple stop; 0 = use --stop-pct")
+    p.add_argument("--be-atr", type=float, default=0.0, help="move to breakeven after N ATR; 0 = off")
+    p.add_argument("--trail-atr", type=float, default=0.0, help="chandelier trail in ATRs; 0 = off")
     p.add_argument("--atr-period", type=int, default=14)
+    p.add_argument("--regime-ma", type=int, default=200, help="index must be above its N DMA; 0 = off")
+    p.add_argument("--trend-ema", type=int, default=200, help="stock must be above its N EMA; 0 = off")
+    p.add_argument("--max-off-high", type=float, default=15.0, help="max %% below 52wk high; 0 = off")
+    p.add_argument("--max-per-day", type=int, default=10, help="keep N strongest signals daily; 0 = off")
     p.add_argument("--min-mcap-cr", type=float, default=2000)
     p.add_argument("--min-turnover-cr", type=float, default=5)
+    p.add_argument("--cost-pct", type=float, default=0.4, help="round-trip cost per trade, %%")
     p.add_argument("--capital", type=float, default=100000)
+    p.add_argument("--tag", default="v2", help="suffix for output filenames")
     p.add_argument("--limit", type=int, default=0, help="cap universe size (testing)")
     args = p.parse_args()
 
     os.makedirs(OUT_DIR, exist_ok=True)
-
-    # Two extra years on the front so RS has its 12-month lookback on day one.
     period = f"{int(args.years) + 2}y"
 
     print("*** Universe ***", flush=True)
-    secs = get_nse_tickers()
-    symbols = sorted(secs.keys())
+    symbols = sorted(get_nse_tickers().keys())
     if args.limit:
         symbols = symbols[:args.limit]
     print(f"  {len(symbols)} NSE symbols")
@@ -361,52 +415,69 @@ def main():
         raise RuntimeError(f"No data for benchmark {REFERENCE_TICKER}; aborting.")
     print(f"  {len(frames)} series downloaded")
 
-    o = panel(frames, "Open")
-    h = panel(frames, "High")
-    l = panel(frames, "Low")
-    c = panel(frames, "Close")
-    v = panel(frames, "Volume")
-
+    o, h, l, c, v = (panel(frames, f) for f in ("Open", "High", "Low", "Close", "Volume"))
     ref = c[REFERENCE_TICKER].copy()
     for df in (o, h, l, c, v):
         df.drop(columns=[REFERENCE_TICKER], inplace=True, errors="ignore")
 
-    # Trade only on sessions the index traded - keeps the calendar clean.
     idx = ref.dropna().index
     o, h, l, c, v = (d.reindex(idx) for d in (o, h, l, c, v))
     ref = ref.reindex(idx)
 
-    print("*** Computing RS percentile on every date ***", flush=True)
-    pct = rs_percentile(c, ref)
+    print("*** Computing RS on every date ***", flush=True)
+    rs = relative_strength(c, ref)
+    pct = to_percentile(rs)
 
-    print("*** Applying size and liquidity filters ***", flush=True)
+    print("*** Filters ***", flush=True)
     info = read_json(TICKER_INFO_FILE)
-    mcap_now = pd.Series({
-        t: (info.get(t, {}).get("info", {}) or {}).get("marketCap")
-        for t in c.columns
-    }, dtype="float64")
-    last_px = c.ffill().iloc[-1]
-    shares = (mcap_now / last_px).replace([np.inf, -np.inf], np.nan)
+    mcap_now = pd.Series({t: (info.get(t, {}).get("info", {}) or {}).get("marketCap")
+                          for t in c.columns}, dtype="float64")
+    shares = (mcap_now / c.ffill().iloc[-1]).replace([np.inf, -np.inf], np.nan)
 
-    mcap_hist = c.mul(shares, axis=1)
-    turnover = (c * v).rolling(50, min_periods=25).median()
+    liquid = ((c.mul(shares, axis=1) >= args.min_mcap_cr * CRORE)
+              & ((c * v).rolling(50, min_periods=25).median() >= args.min_turnover_cr * CRORE)
+              & c.notna())
 
-    tradeable = (
-        (mcap_hist >= args.min_mcap_cr * CRORE)
-        & (turnover >= args.min_turnover_cr * CRORE)
-        & c.notna()
-    )
-    print(f"  {int(tradeable.any().sum())} names pass at least once "
-          f"(of {len(c.columns)}); {int(shares.notna().sum())} have market-cap data")
-
-    trigger = args.rs_trigger
-    signals = (pct >= trigger) & (pct.shift(1) < trigger) & tradeable
-
-    # Trim to the requested trading window (RS needs the first year to warm up).
     start = idx[-1] - pd.Timedelta(days=int(args.years * 365))
-    signals = signals & (signals.index.to_series() >= start).values[:, None]
-    print(f"  {int(signals.values.sum())} raw entry signals "
-          f"from {start.date()} to {idx[-1].date()}")
+    in_window = pd.Series(idx >= start, index=idx)
+
+    cross = (pct >= args.rs_trigger) & (pct.shift(1) < args.rs_trigger)
+    funnel = [("RS crossings in window", int((cross & in_window.values[:, None]).values.sum()))]
+
+    sig = cross & liquid & in_window.values[:, None]
+    funnel.append(("after size + liquidity", int(sig.values.sum())))
+
+    if args.regime_ma:
+        bull = ref > ref.rolling(args.regime_ma).mean()
+        sig &= bull.values[:, None]
+        funnel.append((f"after index > {args.regime_ma} DMA", int(sig.values.sum())))
+
+    if args.trend_ema:
+        sig &= (c > c.ewm(span=args.trend_ema, adjust=False,
+                          min_periods=args.trend_ema).mean())
+        funnel.append((f"after stock > {args.trend_ema} EMA", int(sig.values.sum())))
+
+    if args.max_off_high:
+        off = c / c.rolling(YEAR, min_periods=YEAR // 2).max() - 1
+        sig &= (off >= -args.max_off_high / 100)
+        funnel.append((f"after within {args.max_off_high:g}% of 52wk high",
+                       int(sig.values.sum())))
+
+    if args.max_per_day:
+        kept = sig.copy()
+        for dt in sig.index[sig.any(axis=1)]:
+            names = sig.columns[sig.loc[dt].values]
+            if len(names) > args.max_per_day:
+                # rank on raw RS, not the percentile, which saturates at 99
+                best = rs.loc[dt, names].nlargest(args.max_per_day).index
+                drop = names.difference(best)
+                kept.loc[dt, drop] = False
+        sig = kept
+        funnel.append((f"after keeping top {args.max_per_day} per day",
+                       int(sig.values.sum())))
+
+    for label, n in funnel:
+        print(f"  {label}: {n:,}")
 
     atr_v = atr(h, l, c, args.atr_period)
 
@@ -414,29 +485,32 @@ def main():
     for n in (10, 20, 50):
         print(f"*** Simulating EMA{n} exit ***", flush=True)
         ema = c.ewm(span=n, adjust=False, min_periods=n).mean()
-        tr = simulate(signals, o, h, l, c, ema, atr_v,
-                      args.stop_pct / 100, args.atr_mult)
+        tr = simulate(sig, o, h, l, c, ema, atr_v,
+                      stop_pct=args.stop_pct / 100, stop_atr=args.stop_atr,
+                      be_atr=args.be_atr, trail_atr=args.trail_atr,
+                      cost_pct=args.cost_pct)
         results[n] = metrics(tr, args.capital, idx)
-        tr.to_csv(os.path.join(OUT_DIR, f"trades_ema{n}.csv"), index=False)
+        tr.to_csv(os.path.join(OUT_DIR, f"trades_{args.tag}_ema{n}.csv"), index=False)
         print(f"  {results[n].get('trades', 0)} trades, "
-              f"expectancy {results[n].get('expectancy_pct', 0)}%")
+              f"net expectancy {results[n].get('expectancy_pct', 0)}%")
 
         if not tr.empty:
             eq = (tr.sort_values("exit_date")
-                    .assign(pnl=lambda d: d.ret_pct / 100 * args.capital)
+                    .assign(pnl=lambda d: d.net_pct / 100 * args.capital)
                     .groupby("exit_date").pnl.sum().cumsum())
             eq.rename("cumulative_pnl").to_csv(
-                os.path.join(OUT_DIR, f"equity_ema{n}.csv"))
+                os.path.join(OUT_DIR, f"equity_{args.tag}_ema{n}.csv"))
 
-    bench_window = ref[ref.index >= start].dropna()
-    bench = (bench_window.iloc[-1] / bench_window.iloc[0] - 1) * 100
+    bw = ref[ref.index >= start].dropna()
+    bench = (bw.iloc[-1] / bw.iloc[0] - 1) * 100
 
     report = write_report(results, bench, args, len(c.columns),
-                          int(tradeable.any().sum()), start.date(), idx[-1].date())
-    with open(os.path.join(OUT_DIR, "summary.md"), "w") as f:
+                          int(liquid.any().sum()), start.date(), idx[-1].date(), funnel)
+    with open(os.path.join(OUT_DIR, f"summary_{args.tag}.md"), "w") as f:
         f.write(report)
-    with open(os.path.join(OUT_DIR, "summary.json"), "w") as f:
+    with open(os.path.join(OUT_DIR, f"summary_{args.tag}.json"), "w") as f:
         json.dump({"params": vars(args), "benchmark_pct": round(float(bench), 2),
+                   "funnel": funnel,
                    "results": {str(k): val for k, val in results.items()}}, f, indent=2)
 
     print("\n" + report)
