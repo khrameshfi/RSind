@@ -106,6 +106,29 @@
   .msg { padding: 40px 20px; text-align: center; color: var(--muted); }
   .err { color: var(--neg); }
   code { background: var(--codebg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* ── Hover chart preview ─────────────────────────────────────────────── */
+  .preview {
+    position: fixed; z-index: 60; width: 600px; height: 420px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.45); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .preview[hidden] { display: none; }
+  .preview-hd {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 11px; border-bottom: 1px solid var(--border);
+    font-size: 12px; background: var(--thbg);
+  }
+  .preview-hd .sym { font-weight: 700; font-size: 13px; }
+  .preview-hd .hint { color: var(--muted); margin-left: auto; font-size: 11px; }
+  #tvbox { flex: 1; min-height: 0; }
+  #tvbox .tradingview-widget-container,
+  #tvbox .tradingview-widget-container__widget { height: 100%; width: 100%; }
+  .pvload { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted); font-size: 12px; }
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; padding: 7px 0; }
+  .toggle input { width: auto; min-width: 0; }
+  @media (max-width: 820px) { .preview { display: none !important; } }
 </style>
 </head>
 <body>
@@ -150,6 +173,10 @@
       <button id="reset">Reset</button>
     </div>
     <div class="f">
+      <label>Chart preview</label>
+      <label class="toggle"><input id="hoverchk" type="checkbox" checked> Show on hover</label>
+    </div>
+    <div class="f">
       <label>Export current list</label>
       <div style="display:flex;gap:6px">
         <button id="dl" class="primary">⬇ TradingView .txt</button>
@@ -181,6 +208,15 @@
     </table>
   </div>
   <div class="msg" id="msg">Loading rankings…</div>
+</div>
+
+<div class="preview" id="preview" hidden>
+  <div class="preview-hd">
+    <span class="sym" id="pvsym"></span>
+    <span id="pvmeta" class="sub"></span>
+    <span class="hint">click ticker for full chart · Esc to close</span>
+  </div>
+  <div id="tvbox"><div class="pvload">Loading chart…</div></div>
 </div>
 
 <script>
@@ -332,7 +368,7 @@ function apply() {
   document.getElementById("rows").innerHTML = out.slice(0, 500).map(r => {
     const t = r["Ticker"], p = num(r["Percentile"]);
     const off = num(r["PctFrom52WkHigh"]);
-    return `<tr>
+    return `<tr data-sym="${t}" data-rs="${p ?? ""}">
       <td class="l tk"><a href="https://www.tradingview.com/chart/?symbol=NSE%3A${encodeURIComponent(t)}" target="_blank" rel="noopener">${t}</a></td>
       <td class="${rsClass(p)}">${p ?? "—"}</td>
       <td>${trendCell(r)}</td>
@@ -399,6 +435,127 @@ document.getElementById("cp").addEventListener("click", async e => {
     window.prompt(note + " — press Ctrl/Cmd+C:", text);
   }
 });
+
+// ── Hover chart preview ───────────────────────────────────────────────────
+// Embeds TradingView's Advanced Chart widget in a floating panel. The widget is
+// only rebuilt when the symbol actually changes, and hovering is debounced, so
+// sweeping the cursor down the table doesn't spawn a chart per row.
+const preview = document.getElementById("preview");
+const tvbox = document.getElementById("tvbox");
+const pvsym = document.getElementById("pvsym");
+const pvmeta = document.getElementById("pvmeta");
+const hoverchk = document.getElementById("hoverchk");
+
+const HOVER_DELAY = 350;   // ms of dwell before a chart loads
+const HIDE_GRACE = 220;    // ms to allow moving the cursor into the panel
+let showTimer = null, hideTimer = null, shownSym = null, pinned = false;
+
+try {
+  const saved = localStorage.getItem("rsind-hover");
+  if (saved === "0") hoverchk.checked = false;
+} catch (e) {}
+hoverchk.addEventListener("change", () => {
+  try { localStorage.setItem("rsind-hover", hoverchk.checked ? "1" : "0"); } catch (e) {}
+  if (!hoverchk.checked) hidePreview(true);
+});
+
+function buildWidget(sym) {
+  tvbox.innerHTML = '<div class="pvload">Loading chart…</div>';
+  const outer = document.createElement("div");
+  outer.className = "tradingview-widget-container";
+  const inner = document.createElement("div");
+  inner.className = "tradingview-widget-container__widget";
+  outer.appendChild(inner);
+
+  const s = document.createElement("script");
+  s.type = "text/javascript";
+  s.async = true;
+  s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+  s.textContent = JSON.stringify({
+    symbol: "NSE:" + sym,
+    interval: "D",
+    range: "12M",
+    timezone: "Asia/Kolkata",
+    theme: document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
+    style: "1",                 // candles
+    locale: "en",
+    hide_top_toolbar: true,
+    hide_side_toolbar: true,
+    hide_legend: false,
+    allow_symbol_change: false,
+    save_image: false,
+    calendar: false,
+    withdateranges: false,
+    studies: ["MASimple@tv-basicstudies"],
+    autosize: true
+  });
+  outer.appendChild(s);
+  // Swap in only once built, so the "Loading…" text isn't wiped prematurely.
+  tvbox.innerHTML = "";
+  tvbox.appendChild(outer);
+}
+
+function positionPreview(anchorRect) {
+  const w = preview.offsetWidth || 600, h = preview.offsetHeight || 420;
+  const pad = 12;
+  // Prefer the right of the table row; flip left if it would overflow.
+  let left = anchorRect.right + pad;
+  if (left + w > window.innerWidth - pad) left = anchorRect.left - w - pad;
+  if (left < pad) left = Math.max(pad, window.innerWidth - w - pad);
+  let top = anchorRect.top - 40;
+  top = Math.min(Math.max(pad, top), window.innerHeight - h - pad);
+  preview.style.left = left + "px";
+  preview.style.top = top + "px";
+}
+
+function showPreview(tr) {
+  const sym = tr.dataset.sym;
+  if (!sym) return;
+  positionPreview(tr.getBoundingClientRect());
+  preview.hidden = false;
+  if (sym !== shownSym) {
+    shownSym = sym;
+    pvsym.textContent = "NSE:" + sym;
+    const rs = tr.dataset.rs;
+    pvmeta.textContent = rs ? "RS " + rs : "";
+    buildWidget(sym);
+  }
+}
+
+function hidePreview(immediate) {
+  clearTimeout(hideTimer);
+  const doHide = () => {
+    if (pinned) return;
+    preview.hidden = true;
+    shownSym = null;
+    tvbox.innerHTML = '<div class="pvload">Loading chart…</div>';  // free the iframe
+  };
+  if (immediate) { pinned = false; doHide(); }
+  else hideTimer = setTimeout(doHide, HIDE_GRACE);
+}
+
+document.getElementById("rows").addEventListener("mouseover", e => {
+  if (!hoverchk.checked || pinned) return;
+  const tr = e.target.closest("tr[data-sym]");
+  if (!tr) return;
+  clearTimeout(hideTimer);
+  clearTimeout(showTimer);
+  showTimer = setTimeout(() => showPreview(tr), HOVER_DELAY);
+});
+document.getElementById("rows").addEventListener("mouseout", e => {
+  if (pinned) return;
+  const to = e.relatedTarget;
+  if (to && (to.closest("tr[data-sym]") || to.closest("#preview"))) return;
+  clearTimeout(showTimer);
+  hidePreview(false);
+});
+// Keep it open while the cursor is inside the panel (so you can interact with it).
+preview.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+preview.addEventListener("mouseleave", () => hidePreview(false));
+document.addEventListener("keydown", e => { if (e.key === "Escape") hidePreview(true); });
+window.addEventListener("scroll", () => hidePreview(true), { passive: true });
+// Rebuild the chart in the new theme if it's open when you flip light/dark.
+themeBtn.addEventListener("click", () => { if (shownSym) buildWidget(shownSym); });
 
 document.querySelectorAll("th[data-k]").forEach(th => {
   th.addEventListener("click", () => {
