@@ -108,21 +108,59 @@ def generate_tradingview_csv(percentile_values, first_rs_values):
 # ── Compact price history for the dashboard's hover chart ─────────────────────
 # TradingView's free embeddable widget does not serve NSE data (it answers
 # "This symbol is only available on TradingView" for every Indian ticker), so the
-# dashboard draws its own chart. This writes a small file with ~12 months of daily
-# closes per ticker, aligned to the Nifty 50's session dates so every series shares
-# one x-axis. Closes only, rounded to 2dp — roughly 3-4 MB, served gzipped.
+# dashboard draws its own chart and needs the bars to do it.
+#
+# ~12 months of daily OHLC per ticker, aligned to the Nifty 50's session dates so
+# every series shares one x-axis. Written as one file per starting letter: the
+# whole set is ~12 MB, but the dashboard only ever fetches the shard for the
+# ticker being hovered (~450 KB, ~160 KB gzipped), so nothing stalls on load.
 
 HISTORY_SESSIONS = 260   # ~12 months of NSE trading sessions
 HISTORY_MIN_BARS = 40    # don't bother charting anything shorter
+HISTORY_DIR = os.path.join(DIR, "output", "history")
 
 def _round_price(v):
     """Precision scaled to price size — a ₹3,899 stock doesn't need paise on a
-    400px preview chart, and dropping them meaningfully shrinks the file."""
+    preview chart, and dropping them meaningfully shrinks the files. Kept at four
+    significant figures so candle bodies never collapse to nothing."""
     if v >= 1000:
         return round(v)
     if v >= 100:
         return round(v, 1)
     return round(v, 2)
+
+def _shard_of(ticker):
+    """Tickers starting with a digit or symbol (3MINDIA, 5PAISA, 63MOONS) go to '_'."""
+    c = ticker[0].upper()
+    return c if "A" <= c <= "Z" else "_"
+
+def _series_from(candles, pos, n):
+    """OHLC laid onto the reference calendar. Returns (start_index, o, h, l, c)."""
+    o = [None] * n; h = [None] * n; l = [None] * n; c = [None] * n
+    for cd in candles:
+        i = pos.get(cd.get("datetime"))
+        if i is None or cd.get("close") is None:
+            continue
+        close = _round_price(float(cd["close"]))
+        c[i] = close
+        o[i] = _round_price(float(cd["open"])) if cd.get("open") is not None else close
+        h[i] = _round_price(float(cd["high"])) if cd.get("high") is not None else close
+        l[i] = _round_price(float(cd["low"]))  if cd.get("low")  is not None else close
+
+    # Forward-fill missing sessions as flat bars, then drop the leading empty run
+    # (stocks listed part-way through the window simply start where they start).
+    first, last = None, None
+    for i in range(n):
+        if c[i] is None:
+            if last is not None:
+                c[i] = o[i] = h[i] = l[i] = last
+        else:
+            last = c[i]
+            if first is None:
+                first = i
+    if first is None:
+        return None
+    return first, o[first:], h[first:], l[first:], c[first:]
 
 def build_history(price_data):
     ref_candles = price_data[REFERENCE_TICKER]["candles"]
@@ -130,45 +168,58 @@ def build_history(price_data):
     pos = {d: i for i, d in enumerate(ref_dates)}
     n = len(ref_dates)
 
-    series = {}
+    ref = _series_from(ref_candles, pos, n)
+    ref_block = {"s": ref[0], "c": ref[4]} if ref else None
+
+    shards = {}
+    total = 0
     for ticker, blob in price_data.items():
-        slots = [None] * n
-        for c in blob.get("candles", []):
-            i = pos.get(c.get("datetime"))
-            if i is not None and c.get("close") is not None:
-                slots[i] = _round_price(float(c["close"]))
-
-        # Forward-fill single missing sessions, then drop the leading empty run
-        # (stocks listed part-way through the window start where they start).
-        last, first = None, None
-        for i in range(n):
-            if slots[i] is None:
-                slots[i] = last
-            else:
-                last = slots[i]
-                if first is None:
-                    first = i
-        if first is None:
+        if ticker == REFERENCE_TICKER:
             continue
-        trimmed = slots[first:]
-        if len(trimmed) < HISTORY_MIN_BARS:
+        built = _series_from(blob.get("candles", []), pos, n)
+        if built is None or len(built[4]) < HISTORY_MIN_BARS:
             continue
-        series[ticker] = {"s": first, "c": trimmed}
+        first, o, h, l, c = built
+        shards.setdefault(_shard_of(ticker), {})[ticker] = {
+            "s": first, "o": o, "h": h, "l": l, "c": c
+        }
+        total += 1
 
-    return {"dates": ref_dates, "ref": REFERENCE_TICKER, "series": series}
+    # The benchmark line is drawn on every chart, so it rides along in each shard
+    # (260 numbers — a rounding error next to the ticker data).
+    files = {
+        key: {"dates": ref_dates, "ref": REFERENCE_TICKER, "refc": ref_block, "series": series}
+        for key, series in shards.items()
+    }
+    return files, total, n
 
 def write_history(price_data):
     try:
-        hist = build_history(price_data)
+        files, total, n = build_history(price_data)
     except Exception as e:
-        print(f"⚠ Could not build history.json: {e}")
+        print(f"⚠ Could not build price history: {e}")
         return
-    path = os.path.join(DIR, "output", "history.json")
-    with open(path, "w") as f:
-        json.dump(hist, f, separators=(",", ":"))
-    mb = os.path.getsize(path) / 1e6
-    print(f"✓ history.json: {len(hist['series'])} tickers × up to "
-          f"{len(hist['dates'])} sessions ({mb:.1f} MB).")
+
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+
+    # Clear out shards from a previous run that no longer have any tickers, plus
+    # the single-file layout this replaced, so nothing stale gets served.
+    legacy = os.path.join(DIR, "output", "history.json")
+    if os.path.exists(legacy):
+        os.remove(legacy)
+    for name in os.listdir(HISTORY_DIR):
+        if name.endswith(".json") and name[:-5] not in files:
+            os.remove(os.path.join(HISTORY_DIR, name))
+
+    written = 0
+    for key, payload in files.items():
+        with open(os.path.join(HISTORY_DIR, f"{key}.json"), "w") as f:
+            json.dump(payload, f, separators=(",", ":"))
+        written += os.path.getsize(os.path.join(HISTORY_DIR, f"{key}.json"))
+
+    print(f"✓ output/history/: {total} tickers × up to {n} sessions "
+          f"across {len(files)} shards ({written / 1e6:.1f} MB total, "
+          f"~{written / len(files) / 1e6:.2f} MB per hover).")
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
 
