@@ -1,7 +1,11 @@
 name: Run RSind backtest
 
-# Manual only — this is a heavy job (downloads ~5 years of bars for the whole
-# NSE list) and has nothing to do with the daily ranking update.
+# Manual only - this downloads ~5 years of bars for the whole NSE list and has
+# nothing to do with the daily ranking update.
+#
+# Defaults below are the v2 rules. To reproduce the original v1 run, set:
+#   stop_atr = 0, stop_pct = 5, be_atr = 1, regime_ma = 0, trend_ema = 0,
+#   max_off_high = 0, max_per_day = 0, cost_pct = 0, tag = v1
 on:
   workflow_dispatch:
     inputs:
@@ -11,21 +15,45 @@ on:
       rs_trigger:
         description: "RS percentile the stock must cross above"
         default: "80"
+      stop_atr:
+        description: "Initial stop in ATRs (0 = use stop_pct instead)"
+        default: "2"
       stop_pct:
-        description: "Initial stop, % below entry"
+        description: "Flat stop %, used only when stop_atr is 0"
         default: "5"
-      atr_mult:
-        description: "Move stop to breakeven after this many ATRs of profit"
-        default: "1"
+      be_atr:
+        description: "Move stop to breakeven after N ATRs (0 = never)"
+        default: "0"
+      trail_atr:
+        description: "Chandelier trail in ATRs (0 = off)"
+        default: "0"
+      regime_ma:
+        description: "Only trade when Nifty is above its N DMA (0 = off)"
+        default: "200"
+      trend_ema:
+        description: "Only buy stocks above their N EMA (0 = off)"
+        default: "200"
+      max_off_high:
+        description: "Max % below the 52-week high (0 = off)"
+        default: "15"
+      max_per_day:
+        description: "Keep only the N strongest signals per day (0 = off)"
+        default: "10"
       min_mcap_cr:
         description: "Minimum market cap, Rs crore"
         default: "2000"
       min_turnover_cr:
         description: "Minimum median 50-day turnover, Rs crore"
         default: "5"
+      cost_pct:
+        description: "Round-trip cost per trade, %"
+        default: "0.4"
       capital:
         description: "Rupees per position"
         default: "100000"
+      tag:
+        description: "Label for the output files"
+        default: "v2"
 
 permissions:
   contents: write
@@ -55,18 +83,25 @@ jobs:
           python backtest.py \
             --years "${{ inputs.years }}" \
             --rs-trigger "${{ inputs.rs_trigger }}" \
+            --stop-atr "${{ inputs.stop_atr }}" \
             --stop-pct "${{ inputs.stop_pct }}" \
-            --atr-mult "${{ inputs.atr_mult }}" \
+            --be-atr "${{ inputs.be_atr }}" \
+            --trail-atr "${{ inputs.trail_atr }}" \
+            --regime-ma "${{ inputs.regime_ma }}" \
+            --trend-ema "${{ inputs.trend_ema }}" \
+            --max-off-high "${{ inputs.max_off_high }}" \
+            --max-per-day "${{ inputs.max_per_day }}" \
             --min-mcap-cr "${{ inputs.min_mcap_cr }}" \
             --min-turnover-cr "${{ inputs.min_turnover_cr }}" \
-            --capital "${{ inputs.capital }}"
+            --cost-pct "${{ inputs.cost_pct }}" \
+            --capital "${{ inputs.capital }}" \
+            --tag "${{ inputs.tag }}"
 
-      - name: Show summary in the run log
+      - name: Show summary on the run page
         if: always()
         run: |
-          if [ -f output/backtest/summary.md ]; then
-            cat output/backtest/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
+          F="output/backtest/summary_${{ inputs.tag }}.md"
+          [ -f "$F" ] && cat "$F" >> "$GITHUB_STEP_SUMMARY" || echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit results
         run: |
@@ -74,7 +109,7 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add output/backtest/
           git diff --cached --quiet && echo "No changes to commit." && exit 0
-          git commit -m "Backtest: RS>${{ inputs.rs_trigger }}, ${{ inputs.stop_pct }}% stop, ${{ inputs.years }}y"
+          git commit -m "Backtest ${{ inputs.tag }}: RS>${{ inputs.rs_trigger }}, ${{ inputs.stop_atr }}xATR stop, ${{ inputs.years }}y"
           for i in 1 2 3; do
             git pull --rebase --autostash origin main && git push && exit 0
             echo "Push attempt $i failed, retrying..."
