@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RSind — Indian Market RS Rating</title>
 <style>
-  /* ── Dark theme (default) ────────────────────────────────────────────── */
+  /* ── Dark theme ──────────────────────────────────────────────────────── */
   :root {
     --bg: #0d1117;
     --panel: #161b22;
@@ -18,8 +18,13 @@
     --thbg: #1c2128;
     --hover: rgba(255,255,255,.035);
     --codebg: #21262d;
+    --grid: rgba(255,255,255,.07);
+    --ma: #d29922;
+    --refline: #8b949e;
+    --fill: rgba(47,129,247,.16);
+    --shadow: rgba(0,0,0,.55);
   }
-  /* ── Light theme ─────────────────────────────────────────────────────── */
+  /* ── Light theme (default) ───────────────────────────────────────────── */
   :root[data-theme="light"] {
     --bg: #ffffff;
     --panel: #f6f8fa;
@@ -32,6 +37,11 @@
     --thbg: #eaeef2;
     --hover: rgba(0,0,0,.035);
     --codebg: #eff1f3;
+    --grid: rgba(0,0,0,.07);
+    --ma: #9a6700;
+    --refline: #8c959f;
+    --fill: rgba(9,105,218,.12);
+    --shadow: rgba(31,35,40,.22);
   }
 
   * { box-sizing: border-box; }
@@ -107,25 +117,38 @@
   .err { color: var(--neg); }
   code { background: var(--codebg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
-  /* ── Hover chart preview ─────────────────────────────────────────────── */
+  /* ── Hover chart preview (self-drawn — see note in the script) ────────── */
   .preview {
-    position: fixed; z-index: 60; width: 600px; height: 420px;
+    position: fixed; z-index: 60; width: 620px; height: 400px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0,0,0,.45); overflow: hidden;
+    box-shadow: 0 12px 32px var(--shadow); overflow: hidden;
     display: flex; flex-direction: column;
   }
   .preview[hidden] { display: none; }
   .preview-hd {
-    display: flex; align-items: center; gap: 10px;
-    padding: 7px 11px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
     font-size: 12px; background: var(--thbg);
   }
   .preview-hd .sym { font-weight: 700; font-size: 13px; }
-  .preview-hd .hint { color: var(--muted); margin-left: auto; font-size: 11px; }
-  #tvbox { flex: 1; min-height: 0; }
-  #tvbox .tradingview-widget-container,
-  #tvbox .tradingview-widget-container__widget { height: 100%; width: 100%; }
-  .pvload { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted); font-size: 12px; }
+  .preview-hd .hint { color: var(--muted); margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #chartbox { flex: 1; min-height: 0; position: relative; }
+  #pvcanvas { display: block; width: 100%; height: 100%; }
+  .pvload {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 0 26px; color: var(--muted); font-size: 12px; line-height: 1.5;
+  }
+  .preview-ft {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 6px 12px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); background: var(--thbg);
+  }
+  .preview-ft i { display: inline-block; width: 14px; height: 0; vertical-align: middle;
+                  border-top: 2px solid currentColor; margin-right: 5px; }
+  .k-px { color: var(--pos); }
+  .k-ma { color: var(--ma); }
+  .k-ref { color: var(--refline); }
+  .k-hi { color: var(--strong); }
   .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; padding: 7px 0; }
   .toggle input { width: auto; min-width: 0; }
   @media (max-width: 820px) { .preview { display: none !important; } }
@@ -136,7 +159,7 @@
   <h1>RSind</h1>
   <span class="sub">IBD-style Relative Strength Rating &middot; NSE universe vs Nifty&nbsp;50</span>
   <span class="sub" id="meta" style="margin-left:auto"></span>
-  <button id="theme" title="Switch between light and dark">☀ Light</button>
+  <button id="theme" title="Switch between light and dark">&#9728; Light</button>
 </header>
 
 <div class="wrap">
@@ -158,7 +181,7 @@
       <input id="minvol" type="number" value="100000" min="0" step="50000">
     </div>
     <div class="f">
-      <label>Mkt cap ₹Cr (min / max)</label>
+      <label>Mkt cap &#8377;Cr (min / max)</label>
       <div style="display:flex;gap:6px">
         <input id="mincap" class="narrow" type="number" placeholder="min" min="0" step="100">
         <input id="maxcap" class="narrow" type="number" placeholder="max" min="0" step="100">
@@ -179,13 +202,13 @@
     <div class="f">
       <label>Export current list</label>
       <div style="display:flex;gap:6px">
-        <button id="dl" class="primary">⬇ TradingView .txt</button>
+        <button id="dl" class="primary">&#8681; TradingView .txt</button>
         <button id="cp">Copy symbols</button>
       </div>
     </div>
     <div class="f" style="margin-left:auto">
       <label>&nbsp;</label>
-      <span class="chip" id="count">—</span>
+      <span class="chip" id="count">&mdash;</span>
     </div>
   </div>
 
@@ -207,22 +230,33 @@
       <tbody id="rows"></tbody>
     </table>
   </div>
-  <div class="msg" id="msg">Loading rankings…</div>
+  <div class="msg" id="msg">Loading rankings&hellip;</div>
 </div>
 
 <div class="preview" id="preview" hidden>
   <div class="preview-hd">
     <span class="sym" id="pvsym"></span>
     <span id="pvmeta" class="sub"></span>
-    <span class="hint">click ticker for full chart · Esc to close</span>
+    <span class="hint" id="pvread">click ticker for TradingView &middot; Esc to close</span>
   </div>
-  <div id="tvbox"><div class="pvload">Loading chart…</div></div>
+  <div id="chartbox">
+    <canvas id="pvcanvas"></canvas>
+    <div class="pvload" id="pvmsg">Loading price data&hellip;</div>
+  </div>
+  <div class="preview-ft">
+    <span><i class="k-px"></i>Close</span>
+    <span><i class="k-ma"></i>50-DMA</span>
+    <span><i class="k-ref"></i>Nifty 50 rebased</span>
+    <span><i class="k-hi"></i>Period high</span>
+    <span id="pvchg" style="margin-left:auto"></span>
+  </div>
 </div>
 
 <script>
 // ── Config ────────────────────────────────────────────────────────────────
-// Served from GitHub Pages at the repo root, so the CSV sits alongside this file.
+// Served from GitHub Pages at the repo root, so the data sits alongside this file.
 const CSV_PATH = "output/rs_stocks.csv";
+const HIST_PATH = "output/history.json";
 
 // TradingView caps an imported watchlist at 1,000 symbols.
 const TV_LIMIT = 1000;
@@ -243,8 +277,10 @@ function setTheme(t, persist) {
   try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
   setTheme(saved === "dark" || saved === "light" ? saved : "light", false);
 })();
-themeBtn.addEventListener("click", () =>
-  setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true));
+themeBtn.addEventListener("click", () => {
+  setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true);
+  if (CHART) renderChart();          // repaint the open chart in the new palette
+});
 
 // ── Minimal CSV parser (handles quoted fields, which pandas emits for
 //    values containing commas — e.g. some industry names) ──────────────────
@@ -437,66 +473,223 @@ document.getElementById("cp").addEventListener("click", async e => {
 });
 
 // ── Hover chart preview ───────────────────────────────────────────────────
-// Embeds TradingView's Advanced Chart widget in a floating panel. The widget is
-// only rebuilt when the symbol actually changes, and hovering is debounced, so
-// sweeping the cursor down the table doesn't spawn a chart per row.
-const preview = document.getElementById("preview");
-const tvbox = document.getElementById("tvbox");
-const pvsym = document.getElementById("pvsym");
-const pvmeta = document.getElementById("pvmeta");
+// This used to embed TradingView's Advanced Chart widget, but that widget does
+// not carry NSE data for anonymous embeds — every Indian ticker comes back with
+// "This symbol is only available on TradingView" (verified: NASDAQ:AAPL renders,
+// NSE:HFCL and NSE:INDSWFTLAB do not). So the chart is drawn here instead, from
+// output/history.json, which the pipeline writes alongside the rankings.
+const preview  = document.getElementById("preview");
+const chartbox = document.getElementById("chartbox");
+const cv       = document.getElementById("pvcanvas");
+const pvmsg    = document.getElementById("pvmsg");
+const pvsym    = document.getElementById("pvsym");
+const pvmeta   = document.getElementById("pvmeta");
+const pvread   = document.getElementById("pvread");
+const pvchg    = document.getElementById("pvchg");
 const hoverchk = document.getElementById("hoverchk");
 
-const HOVER_DELAY = 350;   // ms of dwell before a chart loads
-const HIDE_GRACE = 220;    // ms to allow moving the cursor into the panel
+const HOVER_DELAY = 300;   // ms of dwell before a chart loads
+const HIDE_GRACE  = 220;   // ms to allow moving the cursor into the panel
+const HINT_TEXT   = "click ticker for TradingView · Esc to close";
 let showTimer = null, hideTimer = null, shownSym = null, pinned = false;
 
 try {
-  const saved = localStorage.getItem("rsind-hover");
-  if (saved === "0") hoverchk.checked = false;
+  if (localStorage.getItem("rsind-hover") === "0") hoverchk.checked = false;
 } catch (e) {}
 hoverchk.addEventListener("change", () => {
   try { localStorage.setItem("rsind-hover", hoverchk.checked ? "1" : "0"); } catch (e) {}
   if (!hoverchk.checked) hidePreview(true);
 });
 
-function buildWidget(sym) {
-  tvbox.innerHTML = '<div class="pvload">Loading chart…</div>';
-  const outer = document.createElement("div");
-  outer.className = "tradingview-widget-container";
-  const inner = document.createElement("div");
-  inner.className = "tradingview-widget-container__widget";
-  outer.appendChild(inner);
-
-  const s = document.createElement("script");
-  s.type = "text/javascript";
-  s.async = true;
-  s.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
-  s.textContent = JSON.stringify({
-    symbol: "NSE:" + sym,
-    interval: "D",
-    range: "12M",
-    timezone: "Asia/Kolkata",
-    theme: document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
-    style: "1",                 // candles
-    locale: "en",
-    hide_top_toolbar: true,
-    hide_side_toolbar: true,
-    hide_legend: false,
-    allow_symbol_change: false,
-    save_image: false,
-    calendar: false,
-    withdateranges: false,
-    studies: ["MASimple@tv-basicstudies"],
-    autosize: true
-  });
-  outer.appendChild(s);
-  // Swap in only once built, so the "Loading…" text isn't wiped prematurely.
-  tvbox.innerHTML = "";
-  tvbox.appendChild(outer);
+// ── Price history (lazy — only fetched the first time you hover a row) ─────
+let HIST = null, histPromise = null;
+function loadHistory() {
+  if (!histPromise) {
+    histPromise = fetch(HIST_PATH)
+      .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(j => { HIST = j; return j; });
+  }
+  return histPromise;
 }
 
+function showMsg(html) {
+  pvmsg.innerHTML = html;
+  pvmsg.style.display = "flex";
+  cv.style.display = "none";
+  pvchg.textContent = "";
+}
+
+// ── Chart drawing ─────────────────────────────────────────────────────────
+const PAD = { l: 8, r: 56, t: 12, b: 20 };
+let CHART = null;   // prepared series for whatever is on screen
+
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function sma(arr, n) {
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= n) sum -= arr[i - n];
+    if (i >= n - 1) out[i] = sum / n;
+  }
+  return out;
+}
+
+function prepareChart(sym) {
+  const rec = HIST && HIST.series && HIST.series[sym];
+  if (!rec) return null;
+
+  const closes = rec.c;
+  const dates  = HIST.dates.slice(rec.s);
+  const ma     = closes.length > 50 ? sma(closes, 50) : null;
+
+  // Nifty 50 rebased to the stock's first close, so the two lines are comparable.
+  let ref = null;
+  const refRec = HIST.series[HIST.ref];
+  if (refRec && refRec.c.length >= closes.length) {
+    const seg = refRec.c.slice(refRec.c.length - closes.length);
+    if (seg[0]) { const k = closes[0] / seg[0]; ref = seg.map(v => v * k); }
+  }
+
+  const hi = Math.max(...closes);
+  let lo = Math.min(...closes), up = hi;
+  if (ref) { lo = Math.min(lo, ...ref); up = Math.max(up, ...ref); }
+  if (ma) { for (const v of ma) if (v != null) { lo = Math.min(lo, v); up = Math.max(up, v); } }
+  const padY = (up - lo) * 0.06 || 1;
+
+  return { sym, closes, dates, ma, ref, hi, min: lo - padY, max: up + padY };
+}
+
+function renderChart(cursor) {
+  if (!CHART) return;
+  const { closes, dates, ma, ref, hi, min, max } = CHART;
+  const n = closes.length;
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = chartbox.clientWidth, h = chartbox.clientHeight;
+  if (!w || !h) return;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+
+  const iw = w - PAD.l - PAD.r, ih = h - PAD.t - PAD.b;
+  const X = i => PAD.l + (n === 1 ? iw / 2 : i * iw / (n - 1));
+  const Y = v => PAD.t + (max - v) * ih / (max - min);
+
+  const cText = cssVar("--text"), cMuted = cssVar("--muted"), cGrid = cssVar("--grid");
+  const cPos = cssVar("--pos"), cMa = cssVar("--ma"), cRef = cssVar("--refline");
+  const cHi = cssVar("--strong"), cFill = cssVar("--fill");
+  g.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  g.textBaseline = "middle";
+
+  // Horizontal grid + right-hand price scale
+  g.strokeStyle = cGrid; g.fillStyle = cMuted; g.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const v = min + (max - min) * k / 4, y = Math.round(Y(v)) + 0.5;
+    g.beginPath(); g.moveTo(PAD.l, y); g.lineTo(w - PAD.r, y); g.stroke();
+    g.textAlign = "left";
+    g.fillText("₹" + v.toFixed(v < 100 ? 1 : 0), w - PAD.r + 6, Y(v));
+  }
+
+  // Month markers along the bottom
+  g.textAlign = "center";
+  let lastMonth = -1;
+  for (let i = 0; i < n; i++) {
+    const d = new Date(dates[i] * 1000), m = d.getMonth();
+    if (m !== lastMonth) {
+      lastMonth = m;
+      const x = X(i);
+      if (x > PAD.l + 14 && x < w - PAD.r - 14) {
+        g.strokeStyle = cGrid;
+        g.beginPath(); g.moveTo(Math.round(x) + 0.5, PAD.t); g.lineTo(Math.round(x) + 0.5, h - PAD.b); g.stroke();
+        g.fillStyle = cMuted;
+        g.fillText(d.toLocaleDateString("en-IN", { month: "short" }), x, h - PAD.b / 2 - 1);
+      }
+    }
+  }
+
+  const line = (arr, colour, width, dash) => {
+    g.save();
+    g.strokeStyle = colour; g.lineWidth = width; g.setLineDash(dash || []);
+    g.beginPath();
+    let started = false;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] == null) { started = false; continue; }
+      const x = X(i), y = Y(arr[i]);
+      if (started) g.lineTo(x, y); else { g.moveTo(x, y); started = true; }
+    }
+    g.stroke(); g.restore();
+  };
+
+  // Period high
+  g.save();
+  g.strokeStyle = cHi; g.lineWidth = 1; g.setLineDash([4, 4]); g.globalAlpha = .7;
+  g.beginPath(); g.moveTo(PAD.l, Y(hi)); g.lineTo(w - PAD.r, Y(hi)); g.stroke();
+  g.restore();
+
+  if (ref) line(ref, cRef, 1, [3, 3]);
+  if (ma)  line(ma, cMa, 1.25);
+
+  // Close line + area fill
+  g.save();
+  g.beginPath();
+  g.moveTo(X(0), Y(closes[0]));
+  for (let i = 1; i < n; i++) g.lineTo(X(i), Y(closes[i]));
+  g.lineTo(X(n - 1), h - PAD.b); g.lineTo(X(0), h - PAD.b); g.closePath();
+  g.fillStyle = cFill; g.fill();
+  g.restore();
+  line(closes, cPos, 1.75);
+
+  // Crosshair readout
+  if (cursor != null && cursor >= 0 && cursor < n) {
+    const x = Math.round(X(cursor)) + 0.5, v = closes[cursor];
+    g.save();
+    g.strokeStyle = cMuted; g.lineWidth = 1; g.setLineDash([2, 3]); g.globalAlpha = .8;
+    g.beginPath(); g.moveTo(x, PAD.t); g.lineTo(x, h - PAD.b); g.stroke();
+    g.restore();
+    g.fillStyle = cPos;
+    g.beginPath(); g.arc(X(cursor), Y(v), 3, 0, Math.PI * 2); g.fill();
+    const d = new Date(dates[cursor] * 1000);
+    pvread.textContent =
+      d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) +
+      "  ₹" + v.toFixed(2);
+    g.fillStyle = cText;
+  } else {
+    pvread.textContent = HINT_TEXT;
+  }
+
+  const chg = (closes[n - 1] / closes[0] - 1) * 100;
+  const offHi = (closes[n - 1] / hi - 1) * 100;
+  pvchg.innerHTML =
+    `<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</span>` +
+    ` over ${Math.round(n / 21)}M · ${offHi.toFixed(1)}% off high`;
+}
+
+function drawFor(sym) {
+  CHART = prepareChart(sym);
+  if (!CHART) {
+    showMsg("No price history for <b>" + sym + "</b> yet.<br>" +
+            "It needs at least ~2 months of trading data.");
+    return;
+  }
+  pvmsg.style.display = "none";
+  cv.style.display = "block";
+  renderChart();
+}
+
+chartbox.addEventListener("mousemove", e => {
+  if (!CHART || cv.style.display === "none") return;
+  const r = cv.getBoundingClientRect();
+  const iw = r.width - PAD.l - PAD.r;
+  const i = Math.round((e.clientX - r.left - PAD.l) * (CHART.closes.length - 1) / iw);
+  renderChart(Math.max(0, Math.min(CHART.closes.length - 1, i)));
+});
+chartbox.addEventListener("mouseleave", () => { if (CHART) renderChart(); });
+
 function positionPreview(anchorRect) {
-  const w = preview.offsetWidth || 600, h = preview.offsetHeight || 420;
+  const w = preview.offsetWidth || 620, h = preview.offsetHeight || 400;
   const pad = 12;
   // Prefer the right of the table row; flip left if it would overflow.
   let left = anchorRect.right + pad;
@@ -513,13 +706,25 @@ function showPreview(tr) {
   if (!sym) return;
   positionPreview(tr.getBoundingClientRect());
   preview.hidden = false;
-  if (sym !== shownSym) {
-    shownSym = sym;
-    pvsym.textContent = "NSE:" + sym;
-    const rs = tr.dataset.rs;
-    pvmeta.textContent = rs ? "RS " + rs : "";
-    buildWidget(sym);
-  }
+  if (sym === shownSym) return;
+
+  shownSym = sym;
+  CHART = null;
+  pvsym.textContent = "NSE:" + sym;
+  pvmeta.textContent = tr.dataset.rs ? "RS " + tr.dataset.rs : "";
+  pvread.textContent = HINT_TEXT;
+
+  if (HIST) { drawFor(sym); return; }
+
+  showMsg("Loading price data…");
+  loadHistory()
+    .then(() => { if (shownSym === sym) drawFor(sym); })
+    .catch(err => {
+      if (shownSym !== sym) return;
+      showMsg("Could not load <code>" + HIST_PATH + "</code> (" + err.message + ").<br>" +
+              "It is written by the <b>Update RSind rankings</b> workflow — " +
+              "run it once and this chart will appear.");
+    });
 }
 
 function hidePreview(immediate) {
@@ -528,7 +733,7 @@ function hidePreview(immediate) {
     if (pinned) return;
     preview.hidden = true;
     shownSym = null;
-    tvbox.innerHTML = '<div class="pvload">Loading chart…</div>';  // free the iframe
+    CHART = null;
   };
   if (immediate) { pinned = false; doHide(); }
   else hideTimer = setTimeout(doHide, HIDE_GRACE);
@@ -549,14 +754,13 @@ document.getElementById("rows").addEventListener("mouseout", e => {
   clearTimeout(showTimer);
   hidePreview(false);
 });
-// Keep it open while the cursor is inside the panel (so you can interact with it).
+// Keep it open while the cursor is inside the panel.
 preview.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 preview.addEventListener("mouseleave", () => hidePreview(false));
 document.addEventListener("keydown", e => { if (e.key === "Escape") hidePreview(true); });
 window.addEventListener("scroll", () => hidePreview(true), { passive: true });
-// Rebuild the chart in the new theme if it's open when you flip light/dark.
-themeBtn.addEventListener("click", () => { if (shownSym) buildWidget(shownSym); });
 
+// ── Table wiring ──────────────────────────────────────────────────────────
 document.querySelectorAll("th[data-k]").forEach(th => {
   th.addEventListener("click", () => {
     const k = th.dataset.k;
