@@ -105,6 +105,71 @@ def generate_tradingview_csv(percentile_values, first_rs_values):
             trading_days += 1
     return ''.join(reversed(lines))
 
+# ── Compact price history for the dashboard's hover chart ─────────────────────
+# TradingView's free embeddable widget does not serve NSE data (it answers
+# "This symbol is only available on TradingView" for every Indian ticker), so the
+# dashboard draws its own chart. This writes a small file with ~12 months of daily
+# closes per ticker, aligned to the Nifty 50's session dates so every series shares
+# one x-axis. Closes only, rounded to 2dp — roughly 3-4 MB, served gzipped.
+
+HISTORY_SESSIONS = 260   # ~12 months of NSE trading sessions
+HISTORY_MIN_BARS = 40    # don't bother charting anything shorter
+
+def _round_price(v):
+    """Precision scaled to price size — a ₹3,899 stock doesn't need paise on a
+    400px preview chart, and dropping them meaningfully shrinks the file."""
+    if v >= 1000:
+        return round(v)
+    if v >= 100:
+        return round(v, 1)
+    return round(v, 2)
+
+def build_history(price_data):
+    ref_candles = price_data[REFERENCE_TICKER]["candles"]
+    ref_dates = [c["datetime"] for c in ref_candles][-HISTORY_SESSIONS:]
+    pos = {d: i for i, d in enumerate(ref_dates)}
+    n = len(ref_dates)
+
+    series = {}
+    for ticker, blob in price_data.items():
+        slots = [None] * n
+        for c in blob.get("candles", []):
+            i = pos.get(c.get("datetime"))
+            if i is not None and c.get("close") is not None:
+                slots[i] = _round_price(float(c["close"]))
+
+        # Forward-fill single missing sessions, then drop the leading empty run
+        # (stocks listed part-way through the window start where they start).
+        last, first = None, None
+        for i in range(n):
+            if slots[i] is None:
+                slots[i] = last
+            else:
+                last = slots[i]
+                if first is None:
+                    first = i
+        if first is None:
+            continue
+        trimmed = slots[first:]
+        if len(trimmed) < HISTORY_MIN_BARS:
+            continue
+        series[ticker] = {"s": first, "c": trimmed}
+
+    return {"dates": ref_dates, "ref": REFERENCE_TICKER, "series": series}
+
+def write_history(price_data):
+    try:
+        hist = build_history(price_data)
+    except Exception as e:
+        print(f"⚠ Could not build history.json: {e}")
+        return
+    path = os.path.join(DIR, "output", "history.json")
+    with open(path, "w") as f:
+        json.dump(hist, f, separators=(",", ":"))
+    mb = os.path.getsize(path) / 1e6
+    print(f"✓ history.json: {len(hist['series'])} tickers × up to "
+          f"{len(hist['dates'])} sessions ({mb:.1f} MB).")
+
 # ── Rankings ──────────────────────────────────────────────────────────────────
 
 def rankings():
@@ -201,6 +266,8 @@ def rankings():
 
     df.to_csv(os.path.join(DIR, "output", "rs_stocks.csv"), index=False)
     print(f"✓ rs_stocks.csv: {len(df)} NSE tickers ranked vs. {REFERENCE_TICKER}.")
+
+    write_history(price_data)
 
     return df
 
