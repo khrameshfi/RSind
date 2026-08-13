@@ -1,0 +1,73 @@
+{
+  "params": {
+    "years": 3.0,
+    "rs_trigger": 80,
+    "stop_pct": 5.0,
+    "atr_mult": 1.0,
+    "atr_period": 14,
+    "min_mcap_cr": 2000.0,
+    "min_turnover_cr": 5.0,
+    "capital": 100000.0,
+    "limit": 0
+  },
+  "benchmark_pct": 25.53,
+  "results": {
+    "10": {
+      "trades": 5918,
+      "win_rate": 24.9,
+      "avg_win": 7.12,
+      "avg_loss": -2.42,
+      "expectancy_pct": -0.05,
+      "expectancy_rs": -46.0,
+      "profit_factor": 0.97,
+      "total_pnl": -272270.0,
+      "max_dd": -1825340.0,
+      "median_bars": 2,
+      "pct_stopped": 23.7,
+      "pct_be_exit": 19.1,
+      "pct_ema_exit": 56.3,
+      "reached_be": 40.0,
+      "peak_positions": 93,
+      "peak_capital": 9300000,
+      "avg_positions": 26.5
+    },
+    "20": {
+      "trades": 5732,
+      "win_rate": 23.1,
+      "avg_win": 8.11,
+      "avg_loss": -2.44,
+      "expectancy_pct": -0.01,
+      "expectancy_rs": -5.0,
+      "profit_factor": 1.0,
+      "total_pnl": -30790.0,
+      "max_dd": -1681310.0,
+      "median_bars": 2,
+      "pct_stopped": 28.7,
+      "pct_be_exit": 22.8,
+      "pct_ema_exit": 47.4,
+      "reached_be": 41.3,
+      "peak_positions": 117,
+      "peak_capital": 11700000,
+      "avg_positions": 31.7
+    },
+    "50": {
+      "trades": 5454,
+      "win_rate": 20.1,
+      "avg_win": 11.22,
+      "avg_loss": -2.46,
+      "expectancy_pct": 0.29,
+      "expectancy_rs": 291.0,
+      "profit_factor": 1.15,
+      "total_pnl": 1585600.0,
+      "max_dd": -1852080.0,
+      "median_bars": 2,
+      "pct_stopped": 33.6,
+      "pct_be_exit": 27.0,
+      "pct_ema_exit": 37.6,
+      "reached_be": 42.8,
+      "peak_positions": 135,
+      "peak_capital": 13500000,
+      "avg_positions": 43.0
+    }
+  }
+}
