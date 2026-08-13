@@ -2,10 +2,8 @@ name: Update RSind rankings
 
 on:
   schedule:
-    # 11:45 UTC = 17:15 IST — runs ~1h45m after NSE close (15:30 IST), weekdays only.
-    # India has no DST, so this UTC time is stable year-round.
-    - cron: "45 11 * * 1-5"
-  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+    - cron: "45 11 * * 1-5"     # 11:45 UTC = 17:15 IST, weekdays
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -40,16 +38,53 @@ jobs:
         run: |
           git config user.name "rsind-bot"
           git config user.email "actions@users.noreply.github.com"
-          # Only commit results — NOT data/, which holds a ~90MB scratch file of raw
-          # price history that would blow past GitHub's 100MB per-file hard limit.
           git add output/ data_persist/
           git diff --cached --quiet && echo "No changes to commit." && exit 0
           git commit -m "Daily RS update $(date -u +%Y-%m-%d)"
-          # Rebase onto whatever landed on the remote while we were running, so a
-          # concurrent edit doesn't cause a rejected push. Retry a couple of times.
           for i in 1 2 3; do
             git pull --rebase --autostash origin main && git push && exit 0
             echo "Push attempt $i failed, retrying..."
             sleep 5
           done
           echo "Could not push after 3 attempts." && exit 1
+
+      # ── Keep the repository under a fixed size ─────────────────────────────
+      # output/history.json is ~3 MB and is rewritten every run. Git stores every
+      # past version forever, so the repo would grow ~3 MB/day indefinitely.
+      # Deleting or overwriting the file does not reclaim that space — only
+      # discarding the old commits does.
+      #
+      # This step checks the repo's real size via the GitHub API and, once it
+      # crosses the limit, collapses all history into a single fresh commit that
+      # contains exactly the current files. Nothing in the working tree changes;
+      # only the past commits go away. At ~3 MB/day this fires roughly every four
+      # months, so the repo oscillates between about 5 MB and the limit below.
+      - name: Cap repository size
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIMIT_MB: "400"          # compact once the repo exceeds this
+          COOLDOWN_DAYS: "14"      # GitHub reclaims freed space lazily — don't retry sooner
+        run: |
+          SIZE_MB=$(( $(gh api "repos/${GITHUB_REPOSITORY}" --jq .size) / 1024 ))
+          echo "Repository size: ${SIZE_MB} MB (limit ${LIMIT_MB} MB)"
+
+          if [ "$SIZE_MB" -lt "$LIMIT_MB" ]; then
+            echo "Under the limit — nothing to do."
+            exit 0
+          fi
+
+          LAST=$(cat .compacted 2>/dev/null || echo "1970-01-01")
+          AGE=$(( ( $(date -u +%s) - $(date -u -d "$LAST" +%s) ) / 86400 ))
+          if [ "$AGE" -lt "$COOLDOWN_DAYS" ]; then
+            echo "Already compacted ${AGE} day(s) ago; GitHub has not finished reclaiming space yet."
+            exit 0
+          fi
+
+          echo "Compacting history..."
+          date -u +%F > .compacted
+          git checkout --orphan compact-tmp
+          git add -A
+          git commit -m "Compact history — repo had grown to ${SIZE_MB} MB"
+          git branch -M main
+          git push --force origin main
+          echo "Done. History collapsed to a single commit; all current files intact."
